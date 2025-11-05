@@ -79,7 +79,7 @@ sudo systemctl status tcsss
 - 默认目录 Default path: `/etc/tcsss`
 - 至少需要的文件 Required files:
   - `common.conf`
-  - 至少一个 `limits_*.conf`（如 `limits_4gb.conf`）/ at least one memory tier file
+  - 至少一个 `limits_*.conf`（如 `limits_4gb.conf`不限于模板中的四档，程序可以识别配置中的内存档位。如`limits_512mb.conf`可自行编辑）/ at least one memory tier file. Not limited to the four gears in the template, the program can recognize memory gears in the configuration. For example, limits_512mb.conf can be edited by yourself.
   - 至少一个 `1-client.conf`、`1-server.conf`、或 `1-aggregate.conf`
 - 寻址顺序 Resolution order: `--conf` 参数 > `TCSSS_CONFIG_DIR` 环境变量 > `/etc/tcsss` > 可执行文件同目录 `templates/`
 
