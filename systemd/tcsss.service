@@ -1,0 +1,41 @@
+[Unit]
+Description=Traffic Control Smart Shaping Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/lib/tcsss
+
+# Resource limits
+LimitNOFILE=1048576
+LimitNPROC=512
+LimitMSGQUEUE=8388608
+
+# Directories
+RuntimeDirectory=tcsss
+StateDirectory=tcsss
+LogsDirectory=tcsss
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tcsss
+
+# Execution
+ExecStart=/usr/local/bin/tcsss
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Security (minimal for root network service)
+ProtectKernelModules=false
+ProtectKernelLogs=false
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target
