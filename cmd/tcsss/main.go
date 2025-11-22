@@ -19,15 +19,23 @@ import (
 	"tcsss/internal/route"
 	"tcsss/internal/syslimit"
 	"tcsss/internal/traffic"
+	"tcsss/internal/version"
 )
 
 func main() {
 	var confDirFlag string
 	var modeFlag string
+	var showVersion bool
 
 	flag.StringVar(&confDirFlag, "conf", "", "configuration directory path (default: /etc/tcsss)")
 	flag.StringVar(&modeFlag, "mode", "", "traffic mode: client, server, or aggregate")
+	flag.BoolVar(&showVersion, "v", false, "print version and exit")
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("tcsss version %s\n", version.Current)
+		return
+	}
 
 	legacyModeArg := ""
 	if flag.NArg() > 0 {

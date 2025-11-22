@@ -1,22 +1,21 @@
 BINARY ?= tcsss
-GO ?= go
-GOTEST ?= $(GO) test
-GOFMT ?= gofmt
+VERSION := 1.0.1
+LDFLAGS := -ldflags "-s -w -X 'tcsss/internal/version.Current=$(VERSION)'"
 
 build:
-	GOOS=linux GOARCH=amd64 $(GO) build -ldflags="-s -w" -o $(BINARY) ./cmd/tcsss
+	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY) ./cmd/tcsss
 
 build-arm64:
-	GOOS=linux GOARCH=arm64 $(GO) build -ldflags="-s -w" -o $(BINARY)-arm64 ./cmd/tcsss
+	GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o $(BINARY)-arm64 ./cmd/tcsss
 
 test:
-	$(GOTEST) -v ./...
+	go test -v ./...
 
 fmt:
-	$(GOFMT) -w cmd internal
+	gofmt -w cmd internal
 
 tidy:
-	$(GO) mod tidy
+	go mod tidy
 
 clean:
 	rm -f $(BINARY) $(BINARY)-arm64 coverage.out coverage.html quality-report.txt
