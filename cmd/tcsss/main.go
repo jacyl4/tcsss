@@ -127,14 +127,11 @@ func main() {
 
 	limitsApplier := syslimit.NewLimitsConfApplier(logger, templateDir)
 
-	rlimitApplier := syslimit.NewRlimitApplier(logger, templateDir)
-
 	trafficShaper := traffic.NewShaper(logger, trafficSettings)
 
 	daemon := app.NewDaemon(app.Dependencies{
 		SysctlApplier:  sysctlApplier,
 		LimitsApplier:  limitsApplier,
-		RlimitApplier:  rlimitApplier,
 		TrafficManager: trafficShaper,
 		Logger:         logger,
 	})

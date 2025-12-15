@@ -167,7 +167,9 @@ func (lca *LimitsConfApplier) Apply(ctx context.Context) error {
 	lca.loadRlimitsFromTemplates(templates)
 
 	if len(lca.rlimits) == 0 {
-		lca.logger.Warn("no rlimits defined in templates")
+		if lca.logger != nil {
+			lca.logger.Info("no resource limits configured; skipping limits.conf and system.conf")
+		}
 		return nil
 	}
 

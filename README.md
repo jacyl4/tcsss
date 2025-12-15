@@ -13,7 +13,7 @@
 
 - **Intelligent shaping**: Applies CAKE queues to physical and virtual interfaces and configures cubic for loopback.
 - **Dynamic configuration tracking**: Watches topology changes in real time and reapplies policies automatically.
-- **Adaptive system tuning**: Picks sysctl and rlimit templates according to detected memory tiers.
+- **Adaptive system tuning**: Picks sysctl templates according to detected memory tiers.
 - **Route optimization**: Adjusts TCP congestion windows, congestion control, and per-route attributes.
 - **Structured logging**: Emits JSON logs ready for centralized observability pipelines.
 
@@ -156,7 +156,6 @@ tcsss/
 │   │   └── memory.go                   # System memory information reader
 │   ├── syslimit/
 │   │   ├── limits.go                   # /etc/security/limits generator
-│   │   ├── rlimit.go                   # Process rlimit applier
 │   │   └── sysctlconf.go               # sysctl.conf renderer
 │   └── traffic/
 │       ├── classifier.go               # Interface classification entry point
@@ -214,7 +213,6 @@ NewDaemon()
 daemon.Run(ctx)
   ├─ SysctlApplier.Apply()    ── write /etc/sysctl.conf
   ├─ LimitsApplier.Apply()    ── write limits.conf and system.conf
-  ├─ RlimitApplier.Apply()    ── call setrlimit() on current process
   └─ TrafficManager.Apply()
          ├─ RouteOptimizer.OptimizeRoutes()
          └─ applyInterfaces()
@@ -244,9 +242,8 @@ Common tweaks: enable `tcp_sack`, `tcp_timestamps`, and `tcp_window_scaling`; se
 
 ### Resource Limits
 
-- `rlimit` values for `nofile`, `nproc`, and `memlock` scale automatically with memory tiers.
-- PAM/systemd templates populate `/etc/security/limits.conf` and `/etc/systemd/system.conf` with sensible defaults.
-- `setrlimit` is applied immediately after startup to guarantee runtime resources.
+- Process limits are managed by the systemd unit (`LimitNOFILE`, `LimitNPROC`, etc.) shipped with the service.
+- Templates focus on sysctl tuning; limits templates are optional and can populate `/etc/security/limits.conf` and `/etc/systemd/system.conf` when present.
 
 ### Route Optimization
 

@@ -17,11 +17,6 @@ type SysctlService interface {
 	Apply(ctx context.Context) error
 }
 
-// RlimitService defines process resource limit reconciliation behavior.
-type RlimitService interface {
-	Apply(ctx context.Context) error
-}
-
 // LimitsService defines system-wide resource limit reconciliation behavior.
 type LimitsService interface {
 	Apply(ctx context.Context) error
@@ -36,7 +31,6 @@ type TrafficService interface {
 // Dependencies groups the external services required by the daemon.
 type Dependencies struct {
 	SysctlApplier  SysctlService
-	RlimitApplier  RlimitService
 	LimitsApplier  LimitsService
 	TrafficManager TrafficService
 	Logger         *slog.Logger
@@ -46,7 +40,6 @@ type Dependencies struct {
 // Daemon coordinates subsystems and event loops.
 type Daemon struct {
 	sysctlApplier  SysctlService
-	rlimitApplier  RlimitService
 	limitsApplier  LimitsService
 	trafficManager TrafficService
 	logger         *slog.Logger
@@ -63,7 +56,6 @@ func NewDaemon(deps Dependencies) *Daemon {
 	}
 	return &Daemon{
 		sysctlApplier:  deps.SysctlApplier,
-		rlimitApplier:  deps.RlimitApplier,
 		limitsApplier:  deps.LimitsApplier,
 		trafficManager: deps.TrafficManager,
 		logger:         deps.Logger,
@@ -109,17 +101,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		}
 	}
 
-	// Priority 3: Apply current process resource limits (rlimit)
-	// Immediate effect on running process - should be last
-	// Ensures the daemon itself has proper limits
-	if d.rlimitApplier != nil {
-		if err := d.rlimitApplier.Apply(ctx); err != nil {
-			d.logger.Error("rlimit apply failed", slog.String("error", err.Error()))
-			return err
-		}
-	}
-
-	// Priority 4: Apply traffic shaping and start watch loop
+	// Priority 3: Apply traffic shaping and start watch loop
 	var wg sync.WaitGroup
 	watchErrs := make(chan error, 1)
 
