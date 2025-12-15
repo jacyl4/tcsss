@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 )
 
@@ -60,6 +61,46 @@ func (s *Shaper) runOptional(ctx context.Context, name string, args []string, su
 // runQuiet runs a command without logging warnings
 func (s *Shaper) runQuiet(ctx context.Context, name string, args ...string) error {
 	return s.execCommand(ctx, name, args, commandOpts{quiet: true})
+}
+
+// runTcBatch executes multiple tc commands via a temporary batch file when beneficial.
+// Each command should be provided as arguments without the leading "tc".
+func (s *Shaper) runTcBatch(ctx context.Context, commands [][]string) error {
+	// Filter out empty commands
+	trimmed := make([][]string, 0, len(commands))
+	for _, cmd := range commands {
+		if len(cmd) == 0 {
+			continue
+		}
+		trimmed = append(trimmed, cmd)
+	}
+
+	if len(trimmed) == 0 {
+		return nil
+	}
+	if len(trimmed) == 1 {
+		return s.run(ctx, "tc", trimmed[0]...)
+	}
+
+	file, err := os.CreateTemp("", "tcsss-tc-batch-*.txt")
+	if err != nil {
+		return fmt.Errorf("create tc batch file: %w", err)
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+
+	for _, cmd := range trimmed {
+		line := strings.Join(cmd, " ")
+		if _, err := file.WriteString(line + "\n"); err != nil {
+			return fmt.Errorf("write tc batch file: %w", err)
+		}
+	}
+
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync tc batch file: %w", err)
+	}
+
+	return s.run(ctx, "tc", "-batch", file.Name())
 }
 
 // replaceFilter safely replaces a tc filter by deleting first (ignoring errors) then adding.

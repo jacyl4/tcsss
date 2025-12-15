@@ -59,14 +59,6 @@ func (s *Shaper) configureRootQdiscStep(ctx context.Context, pc *profileContext)
 
 func (s *Shaper) configureIngressAndIfbStep(ctx context.Context, pc *profileContext) error {
 	ingress := ingressQdiscConfig(pc.iface)
-	if err := s.run(ctx, "tc", ingress.ReplaceArgs()...); err != nil {
-		return terr.WrapRecoverable(
-			fmt.Errorf("configure ingress qdisc for %s: %w", pc.iface, err),
-			"configure_ingress_qdisc",
-			terr.ErrorContext{Interface: pc.iface, Profile: pc.profileName, Command: "tc qdisc replace ingress"},
-		)
-	}
-
 	if err := s.ensureIfb(ctx, pc.ifbName, pc.mtuStr, pc.queueLength); err != nil {
 		return terr.WrapRecoverable(
 			fmt.Errorf("ensure ifb %s for %s: %w", pc.ifbName, pc.iface, err),
@@ -75,15 +67,12 @@ func (s *Shaper) configureIngressAndIfbStep(ctx context.Context, pc *profileCont
 		)
 	}
 
+	var tcBatch [][]string
+	tcBatch = append(tcBatch, ingress.ReplaceArgs())
+
 	if len(pc.profile.ifbQdisc) > 0 {
 		ifbRoot := ifbRootQdiscConfig(pc.ifbName, pc.profile.ifbQdisc)
-		if err := s.run(ctx, "tc", ifbRoot.ReplaceArgs()...); err != nil {
-			return terr.WrapRecoverable(
-				fmt.Errorf("configure ifb root qdisc %s: %w", pc.ifbName, err),
-				"configure_ifb_root_qdisc",
-				terr.ErrorContext{Interface: pc.iface, Profile: pc.profileName, IFB: pc.ifbName, Command: "tc qdisc replace ifb"},
-			)
-		}
+		tcBatch = append(tcBatch, ifbRoot.ReplaceArgs())
 	}
 
 	filter := FilterConfig{
@@ -94,9 +83,12 @@ func (s *Shaper) configureIngressAndIfbStep(ctx context.Context, pc *profileCont
 		Kind:     "matchall",
 		Actions:  []string{"action", "mirred", "egress", "redirect", "dev", pc.ifbName},
 	}
-	if err := s.replaceFilter(ctx, filter); err != nil {
+	_ = s.runQuiet(ctx, "tc", filter.DeleteArgs()...)
+	tcBatch = append(tcBatch, filter.AddArgs())
+
+	if err := s.runTcBatch(ctx, tcBatch); err != nil {
 		return terr.WrapRecoverable(
-			fmt.Errorf("replace filter for %s -> %s: %w", pc.iface, pc.ifbName, err),
+			fmt.Errorf("configure ingress pipeline for %s -> %s: %w", pc.iface, pc.ifbName, err),
 			"configure_tc_filter",
 			terr.ErrorContext{Interface: pc.iface, Profile: pc.profileName, IFB: pc.ifbName, Command: "tc filter replace"},
 		)
