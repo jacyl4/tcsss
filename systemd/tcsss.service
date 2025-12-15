@@ -4,13 +4,19 @@ After=network.target
 Wants=network.target
 
 [Service]
-Type=notify
+Type=simple
 User=root
 RuntimeDirectory=tcsss
 StateDirectory=tcsss
 LogsDirectory=tcsss
+KillMode=control-group
+KillSignal=SIGTERM
+FinalKillSignal=SIGKILL
+TimeoutStopSec=30s
 
 SyslogIdentifier=tcsss
+StandardOutput=append:/var/log/tcsss/tcsss.log
+StandardError=append:/var/log/tcsss/tcsss.log
 
 ExecStart=/usr/local/bin/tcsss
 Restart=on-failure

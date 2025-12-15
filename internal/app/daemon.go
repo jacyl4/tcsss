@@ -128,8 +128,11 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 
 	d.notifyReady()
 
+	const watcherShutdownTimeout = 5 * time.Second
+
 	select {
 	case <-ctx.Done():
+		d.notifyStopping()
 		if d.logger != nil {
 			d.logger.Info("shutdown signal received, stopping watchers")
 		}
@@ -146,19 +149,37 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		return err
 	}
 
-	wg.Wait()
+	waitDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+	case <-time.After(watcherShutdownTimeout):
+		if d.logger != nil {
+			d.logger.Warn("traffic watcher shutdown timed out; forcing exit")
+		}
+	}
+
 	return ctx.Err()
 }
 
 // ReadyNotifier abstracts systemd readiness notifications for easier testing.
 type ReadyNotifier interface {
 	NotifyReady() (bool, error)
+	NotifyStopping() (bool, error)
 }
 
 type systemdNotifier struct{}
 
 func (systemdNotifier) NotifyReady() (bool, error) {
 	return daemon.SdNotify(false, daemon.SdNotifyReady)
+}
+
+func (systemdNotifier) NotifyStopping() (bool, error) {
+	return daemon.SdNotify(false, daemon.SdNotifyStopping)
 }
 
 func (d *Daemon) notifyReady() {
@@ -179,5 +200,26 @@ func (d *Daemon) notifyReady() {
 		d.logger.Info("systemd notified: ready")
 	} else {
 		d.logger.Debug("systemd notify skipped (no NOTIFY_SOCKET)")
+	}
+}
+
+func (d *Daemon) notifyStopping() {
+	if d.readyNotifier == nil {
+		return
+	}
+	sent, err := d.readyNotifier.NotifyStopping()
+	if err != nil {
+		if d.logger != nil {
+			d.logger.Warn("systemd stopping notification failed", slog.String("error", err.Error()))
+		}
+		return
+	}
+	if d.logger == nil {
+		return
+	}
+	if sent {
+		d.logger.Info("systemd notified: stopping")
+	} else {
+		d.logger.Debug("systemd stopping notify skipped (no NOTIFY_SOCKET)")
 	}
 }

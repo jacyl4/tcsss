@@ -195,7 +195,7 @@ func (sca *SysctlConfApplier) handleReloadResult(output string, err error) error
 }
 
 // parseTemplate extracts key=value pairs from templates.
-// Skips rlimit.* parameters as they are handled by separate appliers.
+// Skips non-sysctl parameters.
 func parseTemplate(templates ...string) map[string]string {
 	params := make(map[string]string)
 
@@ -218,8 +218,8 @@ func parseTemplate(templates ...string) map[string]string {
 			}
 
 			key := strings.TrimSpace(parts[0])
-			if key == "" || strings.HasPrefix(key, "rlimit.") || !isSysctlKey(key) {
-				// Skip non-sysctl parameters (handled by other appliers)
+			if key == "" || !isSysctlKey(key) {
+				// Skip non-sysctl parameters (handled elsewhere)
 				continue
 			}
 
@@ -233,15 +233,33 @@ func parseTemplate(templates ...string) map[string]string {
 
 // isSysctlKey returns true when the key looks like a kernel parameter.
 func isSysctlKey(key string) bool {
-	if strings.HasPrefix(key, "rlimit.") {
+	if strings.ContainsAny(key, " \t") {
 		return false
 	}
-	// Sysctl keys always use dot-separated namespace (e.g. net.ipv4.tcp_sack)
-	if !strings.Contains(key, ".") {
-		return false
+
+	allowedPrefixes := []string{
+		"kernel.",
+		"vm.",
+		"fs.",
+		"net.",
+		"netfilter.",
+		"user.",
+		"dev.",
+		"abi.",
+		"debug.",
+		"crypto.",
+		"sunrpc.",
+		"hw.",
+		"ib.",
 	}
-	// Whitespace within the key would be invalid in sysctl.conf.
-	return !strings.ContainsAny(key, " \t")
+
+	for _, p := range allowedPrefixes {
+		if strings.HasPrefix(key, p) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // merge updates template parameters in existing config, preserving other lines.

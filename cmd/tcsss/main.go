@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -64,7 +65,7 @@ func main() {
 		logger.Warn("legacy mode argument detected; use --mode flag instead", slog.String("argument", legacyModeArg))
 	}
 
-	ctx, cancel := signalContext()
+	ctx, cancel := signalContext(logger)
 	defer cancel()
 
 	kernelStart := time.Now()
@@ -147,22 +148,38 @@ func main() {
 	)
 
 	if err := daemon.Run(ctx); err != nil {
+		if errors.Is(err, context.Canceled) {
+			logger.Info("shutdown complete")
+			return
+		}
 		logger.Error("daemon terminated", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+	logger.Info("shutdown complete")
 }
 
-func signalContext() (context.Context, context.CancelFunc) {
+func signalContext(logger *slog.Logger) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	signals := make(chan os.Signal, 1)
+	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 	go func() {
 		defer signal.Stop(signals)
 		select {
-		case <-signals:
+		case sig := <-signals:
+			if logger != nil {
+				logger.Info("signal received, shutting down", slog.String("signal", sig.String()))
+			}
 			cancel()
+			select {
+			case sig := <-signals:
+				if logger != nil {
+					logger.Warn("second signal received, forcing exit", slog.String("signal", sig.String()))
+				}
+				os.Exit(1)
+			case <-ctx.Done():
+			}
 		case <-ctx.Done():
 		}
 	}()
