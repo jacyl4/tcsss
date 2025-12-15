@@ -8,6 +8,8 @@ import (
 	"os"
 	"runtime/debug"
 	"sync"
+
+	"github.com/coreos/go-systemd/v22/daemon"
 )
 
 // SysctlService defines system limit reconciliation behavior.
@@ -38,6 +40,7 @@ type Dependencies struct {
 	LimitsApplier  LimitsService
 	TrafficManager TrafficService
 	Logger         *slog.Logger
+	ReadyNotifier  ReadyNotifier
 }
 
 // Daemon coordinates subsystems and event loops.
@@ -47,6 +50,7 @@ type Daemon struct {
 	limitsApplier  LimitsService
 	trafficManager TrafficService
 	logger         *slog.Logger
+	readyNotifier  ReadyNotifier
 }
 
 // NewDaemon constructs a Daemon with validated dependencies.
@@ -54,12 +58,16 @@ func NewDaemon(deps Dependencies) *Daemon {
 	if deps.Logger == nil {
 		deps.Logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	}
+	if deps.ReadyNotifier == nil {
+		deps.ReadyNotifier = systemdNotifier{}
+	}
 	return &Daemon{
 		sysctlApplier:  deps.SysctlApplier,
 		rlimitApplier:  deps.RlimitApplier,
 		limitsApplier:  deps.LimitsApplier,
 		trafficManager: deps.TrafficManager,
 		logger:         deps.Logger,
+		readyNotifier:  deps.ReadyNotifier,
 	}
 }
 
@@ -133,6 +141,8 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		}()
 	}
 
+	d.notifyReady()
+
 	select {
 	case <-ctx.Done():
 	case err := <-watchErrs:
@@ -142,4 +152,36 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 
 	wg.Wait()
 	return ctx.Err()
+}
+
+// ReadyNotifier abstracts systemd readiness notifications for easier testing.
+type ReadyNotifier interface {
+	NotifyReady() (bool, error)
+}
+
+type systemdNotifier struct{}
+
+func (systemdNotifier) NotifyReady() (bool, error) {
+	return daemon.SdNotify(false, daemon.SdNotifyReady)
+}
+
+func (d *Daemon) notifyReady() {
+	if d.readyNotifier == nil {
+		return
+	}
+	sent, err := d.readyNotifier.NotifyReady()
+	if err != nil {
+		if d.logger != nil {
+			d.logger.Warn("systemd readiness notification failed", slog.String("error", err.Error()))
+		}
+		return
+	}
+	if d.logger == nil {
+		return
+	}
+	if sent {
+		d.logger.Info("systemd notified: ready")
+	} else {
+		d.logger.Debug("systemd notify skipped (no NOTIFY_SOCKET)")
+	}
 }

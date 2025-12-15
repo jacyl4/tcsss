@@ -1,6 +1,7 @@
 package detector
 
 import (
+	"log/slog"
 	"sync"
 
 	"tcsss/internal/sysinfo"
@@ -19,6 +20,7 @@ const (
 var (
 	// Global cache for memory detection result
 	cachedTier     MemoryTier
+	cachedTotalKB  uint64
 	cachedTierOnce sync.Once
 	cachedTierErr  error
 )
@@ -33,6 +35,12 @@ var (
 //   - MemoryTier8GB:  < 10.0 GB (actual 8GB systems)
 //   - MemoryTier12GB: >= 10.0 GB (actual 12GB+ systems)
 func DetectMemoryTier() (MemoryTier, error) {
+	info, err := DetectMemoryInfo(nil)
+	return info.Tier, err
+}
+
+// DetectMemoryInfo returns memory size and tier, caching results for reuse.
+func DetectMemoryInfo(logger *slog.Logger) (MemoryInfo, error) {
 	cachedTierOnce.Do(func() {
 		memKB, err := sysinfo.ReadMemoryKB("/proc/meminfo")
 		if err != nil {
@@ -41,10 +49,24 @@ func DetectMemoryTier() (MemoryTier, error) {
 			return
 		}
 
+		cachedTotalKB = memKB
 		memGB := float64(memKB) / (1024 * 1024)
 		cachedTier = classifyMemoryTier(memGB)
 	})
-	return cachedTier, cachedTierErr
+
+	info := MemoryInfo{
+		TotalKB: cachedTotalKB,
+		TotalGB: float64(cachedTotalKB) / (1024 * 1024),
+		Tier:    cachedTier,
+	}
+
+	if logger != nil && cachedTotalKB > 0 {
+		logger.Info("system memory detected",
+			slog.Float64("memory_gb", info.TotalGB),
+			slog.String("tier", info.Tier.String()))
+	}
+
+	return info, cachedTierErr
 }
 
 // classifyMemoryTier determines the memory tier based on available system memory (in GB).
@@ -59,5 +81,28 @@ func classifyMemoryTier(memoryGB float64) MemoryTier {
 		return MemoryTier8GB
 	default: // 10GB+ (actual 12GB+ systems)
 		return MemoryTier12GB
+	}
+}
+
+// MemoryInfo captures total memory and tier classification.
+type MemoryInfo struct {
+	TotalKB uint64
+	TotalGB float64
+	Tier    MemoryTier
+}
+
+// String returns a human-readable label for the memory tier.
+func (mt MemoryTier) String() string {
+	switch mt {
+	case MemoryTier1GB:
+		return "1gb"
+	case MemoryTier4GB:
+		return "4gb"
+	case MemoryTier8GB:
+		return "8gb"
+	case MemoryTier12GB:
+		return "12gb_plus"
+	default:
+		return "unknown"
 	}
 }

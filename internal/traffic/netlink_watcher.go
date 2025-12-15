@@ -98,11 +98,13 @@ func (s *Shaper) watchLoop(ctx context.Context, subs *netlinkSubscriptions) erro
 			if !ok {
 				return errors.New("link subscription closed")
 			}
+			s.invalidateEthtoolCacheFromLinkUpdate(update)
 			pending.AddLink(update)
 		case update, ok := <-subs.addrs:
 			if !ok {
 				return errors.New("addr subscription closed")
 			}
+			s.invalidateEthtoolCacheFromAddrUpdate(update)
 			pending.AddAddr(update)
 		case <-applyTicker.C:
 			if err := s.applyPending(ctx, pending); err != nil && !errors.Is(err, context.Canceled) {
@@ -222,4 +224,41 @@ func (s *Shaper) applyPending(ctx context.Context, pending *pendingChanges) erro
 		return s.applyInterfaces(ctxApply, nil)
 	}
 	return s.applyInterfaces(ctxApply, names)
+}
+
+func (s *Shaper) invalidateEthtoolCacheFromLinkUpdate(update netlink.LinkUpdate) {
+	if s == nil {
+		return
+	}
+
+	if attrs := update.Attrs(); attrs != nil && attrs.Name != "" {
+		s.invalidateEthtoolCache(attrs.Name)
+		return
+	}
+
+	if link := update.Link; link != nil {
+		if linkAttrs := link.Attrs(); linkAttrs != nil && linkAttrs.Name != "" {
+			s.invalidateEthtoolCache(linkAttrs.Name)
+			return
+		}
+	}
+
+	s.invalidateEthtoolCacheAll()
+}
+
+func (s *Shaper) invalidateEthtoolCacheFromAddrUpdate(update netlink.AddrUpdate) {
+	if s == nil {
+		return
+	}
+	if update.LinkIndex == 0 {
+		s.invalidateEthtoolCacheAll()
+		return
+	}
+
+	if name, err := getLinkName(s.netlink, update.LinkIndex); err == nil && name != "" {
+		s.invalidateEthtoolCache(name)
+		return
+	}
+
+	s.invalidateEthtoolCacheAll()
 }

@@ -37,12 +37,19 @@ func main() {
 		return
 	}
 
+	startTime := time.Now()
+
 	legacyModeArg := ""
 	if flag.NArg() > 0 {
 		legacyModeArg = flag.Arg(0)
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	stageDurations := map[string]time.Duration{}
+	recordDuration := func(stage string, since time.Time) {
+		stageDurations[stage] = time.Since(since)
+	}
 
 	templateDir, err := resolveTemplateDir(confDirFlag)
 	if err != nil {
@@ -60,21 +67,53 @@ func main() {
 	ctx, cancel := signalContext()
 	defer cancel()
 
+	kernelStart := time.Now()
 	if err := detector.ValidateKernelModules(logger); err != nil {
 		logger.Error("kernel module validation failed", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+	recordDuration("kernel_modules", kernelStart)
 
-	if err := detector.ValidateRuntime(logger); err != nil {
+	validationStart := time.Now()
+	type memoryResult struct {
+		info detector.MemoryInfo
+		err  error
+	}
+
+	runtimeCh := make(chan error, 1)
+	memoryCh := make(chan memoryResult, 1)
+
+	go func() {
+		runtimeCh <- detector.ValidateRuntime(logger)
+	}()
+
+	go func() {
+		info, detectErr := detector.DetectMemoryInfo(logger)
+		memoryCh <- memoryResult{info: info, err: detectErr}
+	}()
+
+	if err := <-runtimeCh; err != nil {
 		logger.Error("runtime validation failed", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
+	var memInfo detector.MemoryInfo
+	memResult := <-memoryCh
+	if memResult.err != nil {
+		logger.Warn("memory detection failed; proceeding with defaults", slog.String("error", memResult.err.Error()))
+	} else {
+		memInfo = memResult.info
+	}
+
+	recordDuration("runtime_and_memory", validationStart)
+
+	configStart := time.Now()
 	initConfig, err := configtemplates.LoadTrafficInitConfig(templateDir, mode)
 	if err != nil {
 		logger.Warn("falling back to default traffic template", slog.String("error", err.Error()), slog.String("fallback_mode", string(initConfig.Mode)))
 	}
 	logger.Info("traffic template applied", slog.String("mode", string(initConfig.Mode)))
+	recordDuration("traffic_template_load", configStart)
 
 	trafficSettings := traffic.Settings{
 		Routes: route.WindowConfig{
@@ -99,6 +138,16 @@ func main() {
 		TrafficManager: trafficShaper,
 		Logger:         logger,
 	})
+
+	logger.Info("startup checks completed",
+		slog.Duration("total", time.Since(startTime)),
+		slog.Duration("kernel_modules", stageDurations["kernel_modules"]),
+		slog.Duration("runtime_and_memory", stageDurations["runtime_and_memory"]),
+		slog.Duration("traffic_template_load", stageDurations["traffic_template_load"]),
+		slog.Float64("memory_gb", memInfo.TotalGB),
+		slog.String("memory_tier", memInfo.Tier.String()),
+		slog.String("mode", string(initConfig.Mode)),
+	)
 
 	if err := daemon.Run(ctx); err != nil {
 		logger.Error("daemon terminated", slog.String("error", err.Error()))

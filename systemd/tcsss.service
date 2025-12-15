@@ -1,10 +1,11 @@
 [Unit]
 Description=Traffic Control Smart Shaping Service
-After=network-online.target
-Wants=network-online.target
+After=network.target
+Wants=network.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 User=root
 WorkingDirectory=/var/lib/tcsss
 

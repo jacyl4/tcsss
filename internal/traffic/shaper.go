@@ -25,6 +25,9 @@ type Shaper struct {
 	cleanupInterval   time.Duration
 	applyTimeout      time.Duration
 	profiles          profileSet
+	ethtoolCache      map[string]*ethtoolCacheEntry
+	ethtoolCacheMu    sync.RWMutex
+	ethtoolCacheTTL   time.Duration
 }
 
 // NewShaper constructs a traffic Shaper.
@@ -50,6 +53,8 @@ func NewShaperWithDependencies(logger *slog.Logger, settings Settings, netlinkCl
 		cleanupInterval:   settings.Watcher.CleanupInterval,
 		applyTimeout:      settings.Watcher.ApplyTimeout,
 		profiles:          newProfileSet(settings.Profiles),
+		ethtoolCache:      make(map[string]*ethtoolCacheEntry),
+		ethtoolCacheTTL:   settings.EthtoolCacheTTL,
 	}
 }
 
