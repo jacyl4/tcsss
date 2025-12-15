@@ -1,11 +1,11 @@
 package traffic
 
 import (
+	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"os"
+	"os/exec"
 	"strings"
 )
 
@@ -22,7 +22,7 @@ func (s *Shaper) execCommand(ctx context.Context, name string, args []string, op
 
 	output, err := executor.Run(ctx, name, args)
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
+		if isContextError(err) {
 			return err
 		}
 
@@ -82,25 +82,28 @@ func (s *Shaper) runTcBatch(ctx context.Context, commands [][]string) error {
 		return s.run(ctx, "tc", trimmed[0]...)
 	}
 
-	file, err := os.CreateTemp("", "tcsss-tc-batch-*.txt")
-	if err != nil {
-		return fmt.Errorf("create tc batch file: %w", err)
-	}
-	defer os.Remove(file.Name())
-	defer file.Close()
-
+	var stdin bytes.Buffer
 	for _, cmd := range trimmed {
-		line := strings.Join(cmd, " ")
-		if _, err := file.WriteString(line + "\n"); err != nil {
-			return fmt.Errorf("write tc batch file: %w", err)
+		stdin.WriteString(strings.Join(cmd, " "))
+		stdin.WriteByte('\n')
+	}
+
+	tcCmd := exec.CommandContext(ctx, "tc", "-batch", "-")
+	tcCmd.Stdin = &stdin
+	output, err := tcCmd.CombinedOutput()
+	if err != nil {
+		if isContextError(err) {
+			return err
+		}
+		return fmt.Errorf("tc -batch failed: %w (output: %s)", err, strings.TrimSpace(string(output)))
+	}
+	if s.logger != nil {
+		outStr := strings.TrimSpace(string(output))
+		if outStr != "" {
+			s.logger.Debug("tc batch output", slog.String("output", outStr))
 		}
 	}
-
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("sync tc batch file: %w", err)
-	}
-
-	return s.run(ctx, "tc", "-batch", file.Name())
+	return nil
 }
 
 // replaceFilter safely replaces a tc filter by deleting first (ignoring errors) then adding.

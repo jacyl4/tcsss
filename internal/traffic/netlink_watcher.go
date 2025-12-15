@@ -131,7 +131,10 @@ func (s *Shaper) watchLoop(ctx context.Context, subs *netlinkSubscriptions) erro
 			s.invalidateEthtoolCacheFromAddrUpdate(update)
 			pending.AddAddr(update)
 		case <-applyTicker.C:
-			if err := s.applyPending(ctx, pending); err != nil && !errors.Is(err, context.Canceled) {
+			if err := s.applyPending(ctx, pending); err != nil {
+				if isContextError(err) {
+					return err
+				}
 				s.handleCategorizedError("reapply failed", "", err, terr.CategoryRecoverable)
 			}
 		case <-cleanupTicker.C:

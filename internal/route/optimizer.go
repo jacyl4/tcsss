@@ -3,10 +3,14 @@ package route
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 
 	terr "tcsss/internal/errors"
 )
@@ -23,6 +27,14 @@ type Optimizer struct {
 	executor             CommandExecutor
 	commandTimeout       time.Duration
 }
+
+type routeEntry struct {
+	route    netlink.Route
+	linkName string
+	linkDown bool
+}
+
+type routeFilter func(routeEntry) bool
 
 // NewOptimizer constructs an Optimizer with dependencies.
 func NewOptimizer(logger *slog.Logger, cfg WindowConfig, deps Dependencies) *Optimizer {
@@ -67,6 +79,9 @@ func (opt *Optimizer) Optimize(ctx context.Context) error {
 	var errs terr.MultiError
 
 	if err := opt.optimizeLoopback(ctx); err != nil {
+		if isContextError(err) {
+			return err
+		}
 		errs.Add(fmt.Errorf("loopback: %w", err))
 		if opt.logger != nil {
 			opt.logger.Warn("Failed to optimize loopback routes", slog.String("error", err.Error()))
@@ -74,6 +89,9 @@ func (opt *Optimizer) Optimize(ctx context.Context) error {
 	}
 
 	if err := opt.optimizeLocal(ctx); err != nil {
+		if isContextError(err) {
+			return err
+		}
 		errs.Add(fmt.Errorf("local: %w", err))
 		if opt.logger != nil {
 			opt.logger.Warn("Failed to optimize local routes", slog.String("error", err.Error()))
@@ -81,6 +99,9 @@ func (opt *Optimizer) Optimize(ctx context.Context) error {
 	}
 
 	if err := opt.optimizeNIC(ctx); err != nil {
+		if isContextError(err) {
+			return err
+		}
 		errs.Add(fmt.Errorf("nic: %w", err))
 		if opt.logger != nil {
 			opt.logger.Warn("Failed to optimize NIC routes", slog.String("error", err.Error()))
@@ -101,24 +122,28 @@ func (opt *Optimizer) Optimize(ctx context.Context) error {
 
 func (opt *Optimizer) optimizeLocal(ctx context.Context) error {
 	job := routeJob{
-		category:       "local",
-		routeArgs:      []string{"route", "show", "table", "local"},
-		filter:         shouldOptimizeLocal,
-		params:         newParams(1500, opt.initCwndSegments, opt.initRwndSegments, "cubic"),
-		fetchOperation: "fetch_local_routes",
-		applyOperation: "optimize_local_routes",
+		category:         "local",
+		table:            unix.RT_TABLE_LOCAL,
+		filter:           shouldOptimizeLocalRoute,
+		params:           newParams(1500, opt.initCwndSegments, opt.initRwndSegments, "cubic"),
+		fetchOperation:   "fetch_local_routes",
+		applyOperation:   "optimize_local_routes",
+		commonLogAttrs:   nil,
+		commonErrContext: terr.ErrorContext{},
 	}
 	return opt.optimize(ctx, job)
 }
 
 func (opt *Optimizer) optimizeLoopback(ctx context.Context) error {
 	job := routeJob{
-		category:       "loopback",
-		routeArgs:      []string{"route", "show", "table", "local"},
-		filter:         shouldOptimizeLoopback,
-		params:         newParams(65520, opt.loopbackCwndSegments, opt.loopbackRwndSegments, "cubic"),
-		fetchOperation: "fetch_loopback_routes",
-		applyOperation: "optimize_loopback_routes",
+		category:         "loopback",
+		table:            unix.RT_TABLE_LOCAL,
+		filter:           shouldOptimizeLoopbackRoute,
+		params:           newParams(65520, opt.loopbackCwndSegments, opt.loopbackRwndSegments, "cubic"),
+		fetchOperation:   "fetch_loopback_routes",
+		applyOperation:   "optimize_loopback_routes",
+		commonLogAttrs:   nil,
+		commonErrContext: terr.ErrorContext{},
 	}
 	return opt.optimize(ctx, job)
 }
@@ -139,30 +164,35 @@ func (opt *Optimizer) optimizeNIC(ctx context.Context) error {
 	}
 
 	job := routeJob{
-		category:  "nic",
-		routeArgs: []string{"route", "show"},
-		filter: func(line string) bool {
-			return shouldOptimizeNIC(line, nic)
+		category: "nic",
+		table:    unix.RT_TABLE_MAIN,
+		filter: func(entry routeEntry) bool {
+			return shouldOptimizeNICRoute(entry, nic)
 		},
-		params:         newParams(1500, opt.initCwndSegments, opt.initRwndSegments, congctl),
-		fetchOperation: "fetch_nic_routes",
-		applyOperation: "optimize_nic_routes",
+		params: newParams(1500, opt.initCwndSegments, opt.initRwndSegments, congctl),
 		commonLogAttrs: []slog.Attr{
 			slog.String("interface", nic),
 			slog.String("congctl", congctl),
 		},
-		commonErrContext: terr.ErrorContext{Interface: nic},
+		fetchOperation: "fetch_nic_routes",
+		applyOperation: "optimize_nic_routes",
+		commonErrContext: terr.ErrorContext{
+			Interface: nic,
+		},
 	}
 	return opt.optimize(ctx, job)
 }
 
 func (opt *Optimizer) optimize(ctx context.Context, job routeJob) error {
-	lines, err := opt.fetchRoutes(ctx, job.routeArgs...)
+	routes, err := opt.fetchRoutes(ctx, job.table)
 	if err != nil {
+		if isContextError(err) {
+			return err
+		}
 		return job.fetchError(err)
 	}
 
-	filtered := opt.filterRoutes(lines, job.filter)
+	filtered := opt.filterRoutes(routes, job.filter)
 
 	if opt.logger != nil {
 		attrs := appendAttrs(job.commonLogAttrs,
@@ -172,7 +202,7 @@ func (opt *Optimizer) optimize(ctx context.Context, job routeJob) error {
 	}
 
 	start := time.Now()
-	optimized, skipped, applyErr := opt.applyRoutes(ctx, filtered, job.params.args(), job.category)
+	optimized, skipped, applyErr := opt.applyRoutes(ctx, filtered, job.params, job.category)
 
 	if opt.logger != nil {
 		attrs := appendAttrs(job.commonLogAttrs,
@@ -185,35 +215,17 @@ func (opt *Optimizer) optimize(ctx context.Context, job routeJob) error {
 	}
 
 	if applyErr != nil {
+		if isContextError(applyErr) {
+			return applyErr
+		}
 		return job.applyError(applyErr)
 	}
 	return nil
 }
 
-func appendAttrs(base []slog.Attr, additional ...slog.Attr) []slog.Attr {
-	if len(additional) == 0 {
-		return cloneAttrs(base)
-	}
-	result := make([]slog.Attr, 0, len(base)+len(additional))
-	result = append(result, base...)
-	result = append(result, additional...)
-	return result
-}
-
-func cloneAttrs(attrs []slog.Attr) []slog.Attr {
-	if len(attrs) == 0 {
-		return nil
-	}
-	out := make([]slog.Attr, len(attrs))
-	copy(out, attrs)
-	return out
-}
-
-type routeFilter func(string) bool
-
 type routeJob struct {
 	category         string
-	routeArgs        []string
+	table            int
 	filter           routeFilter
 	params           params
 	fetchOperation   string
@@ -240,53 +252,199 @@ func (job routeJob) applyError(err error) error {
 	)
 }
 
-func (opt *Optimizer) cleanRouteLine(line string) string {
-	tokens := strings.Fields(line)
-	if len(tokens) == 0 {
-		return ""
+func appendAttrs(base []slog.Attr, additional ...slog.Attr) []slog.Attr {
+	if len(additional) == 0 {
+		return cloneAttrs(base)
 	}
-
-	result := make([]string, 0, len(tokens))
-	skipNext := false
-
-	for i := 0; i < len(tokens); i++ {
-		if skipNext {
-			skipNext = false
-			continue
-		}
-
-		token := tokens[i]
-		switch token {
-		case "mtu", "initcwnd", "initrwnd", "fastopen_no_cookie":
-			if i+1 < len(tokens) {
-				skipNext = true
-			}
-			continue
-		case "congctl":
-			if i+2 < len(tokens) && tokens[i+1] == "lock" {
-				i += 2
-				continue
-			}
-		}
-		result = append(result, token)
-	}
-
-	return strings.Join(result, " ")
+	result := make([]slog.Attr, 0, len(base)+len(additional))
+	result = append(result, base...)
+	result = append(result, additional...)
+	return result
 }
 
-func (opt *Optimizer) applyRouteChange(ctx context.Context, routeLine string, params ...string) error {
-	tokens := strings.Fields(routeLine)
-	if len(tokens) == 0 {
-		return fmt.Errorf("empty route line")
+func cloneAttrs(attrs []slog.Attr) []slog.Attr {
+	if len(attrs) == 0 {
+		return nil
 	}
-	args := append([]string{"route", "change"}, tokens...)
-	args = append(args, params...)
-	if _, err := opt.runIPCommand(ctx, args...); err != nil {
-		return fmt.Errorf("ip %s: %w", strings.Join(args, " "), err)
+	out := make([]slog.Attr, len(attrs))
+	copy(out, attrs)
+	return out
+}
+
+func (opt *Optimizer) fetchRoutes(ctx context.Context, table int) ([]routeEntry, error) {
+	if opt.netlink == nil {
+		return nil, fmt.Errorf("netlink client is nil")
+	}
+
+	routes, err := opt.netlink.RouteListFiltered(netlink.FAMILY_V4, &netlink.Route{Table: table}, netlink.RT_FILTER_TABLE)
+	if err != nil {
+		return nil, fmt.Errorf("list routes: %w", err)
+	}
+
+	entries := make([]routeEntry, 0, len(routes))
+	for _, rt := range routes {
+		if ctx != nil && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		linkName := ""
+		linkDown := false
+		if rt.LinkIndex > 0 {
+			if attrs, err := safeGetLinkAttrs(opt.netlink, rt.LinkIndex); err == nil {
+				linkName = attrs.Name
+				switch attrs.OperState {
+				case netlink.OperDown, netlink.OperLowerLayerDown:
+					linkDown = true
+				}
+			}
+		}
+
+		entries = append(entries, routeEntry{
+			route:    rt,
+			linkName: linkName,
+			linkDown: linkDown,
+		})
+	}
+
+	return entries, nil
+}
+
+func (opt *Optimizer) filterRoutes(routes []routeEntry, predicate routeFilter) []routeEntry {
+	if predicate == nil || len(routes) == 0 {
+		return routes
+	}
+
+	result := make([]routeEntry, 0, len(routes))
+	for _, route := range routes {
+		if predicate(route) {
+			result = append(result, route)
+		}
+	}
+	return result
+}
+
+func (opt *Optimizer) applyRoutes(ctx context.Context, routes []routeEntry, params params, category string) (int, int, error) {
+	if len(routes) == 0 {
+		return 0, 0, nil
+	}
+
+	optimized := 0
+	failures := 0
+	var firstErr error
+
+	for _, entry := range routes {
+		if ctx != nil && ctx.Err() != nil {
+			return optimized, failures, ctx.Err()
+		}
+
+		if err := opt.applyRouteChange(ctx, entry.route, params); err != nil {
+			if isContextError(err) {
+				return optimized, failures, err
+			}
+
+			if firstErr == nil {
+				firstErr = err
+			}
+			failures++
+
+			if opt.logger != nil {
+				opt.logger.Debug("route optimization skipped",
+					slog.String("category", category),
+					slog.String("route", summarizeRoute(entry)),
+					slog.String("error", err.Error()))
+			}
+			continue
+		}
+
+		optimized++
+		if opt.logger != nil {
+			opt.logger.Debug("route optimization applied",
+				slog.String("category", category),
+				slog.String("route", summarizeRoute(entry)))
+		}
+	}
+
+	return optimized, failures, firstErr
+}
+
+func (opt *Optimizer) applyRouteChange(ctx context.Context, route netlink.Route, params params) error {
+	if opt.netlink == nil {
+		return fmt.Errorf("netlink client is nil")
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	updated := route
+	updated.MTU = params.mtu
+	updated.InitCwnd = params.initCwnd
+	updated.InitRwnd = params.initRwnd
+	updated.FastOpenNoCookie = 1
+	if params.congctl != "" {
+		updated.Congctl = params.congctl
+	}
+
+	if err := opt.netlink.RouteReplace(&updated); err != nil {
+		return fmt.Errorf("route replace: %w", err)
 	}
 	return nil
 }
 
+func summarizeRoute(entry routeEntry) string {
+	dst := "default"
+	if entry.route.Dst != nil {
+		dst = entry.route.Dst.String()
+	}
+	gw := "-"
+	if entry.route.Gw != nil {
+		if gwStr := entry.route.Gw.String(); gwStr != "" {
+			gw = gwStr
+		}
+	}
+	dev := entry.linkName
+	if dev == "" {
+		dev = "-"
+	}
+	return fmt.Sprintf("dst=%s gw=%s dev=%s table=%d", dst, gw, dev, entry.route.Table)
+}
+
+func shouldOptimizeLocalRoute(entry routeEntry) bool {
+	if entry.route.Table != unix.RT_TABLE_LOCAL || entry.linkName == "" {
+		return false
+	}
+	if entry.linkName == "lo" {
+		return false
+	}
+	if entry.linkDown {
+		return false
+	}
+	if entry.route.Type == unix.RTN_BROADCAST || entry.route.Type == unix.RTN_MULTICAST {
+		return false
+	}
+	return true
+}
+
+func shouldOptimizeLoopbackRoute(entry routeEntry) bool {
+	return entry.route.Table == unix.RT_TABLE_LOCAL && entry.linkName == "lo"
+}
+
+func shouldOptimizeNICRoute(entry routeEntry, nic string) bool {
+	if entry.route.Table != unix.RT_TABLE_MAIN || entry.linkName == "" {
+		return false
+	}
+	if entry.linkName != nic {
+		return false
+	}
+	if entry.linkDown {
+		return false
+	}
+	if entry.route.Congctl != "" {
+		return false
+	}
+	return true
+}
+
+// runIPCommand executes ip commands with timeout.
 func (opt *Optimizer) runIPCommand(ctx context.Context, args ...string) (string, error) {
 	ctx, cancel := opt.commandContext(ctx)
 	defer cancel()
@@ -303,7 +461,7 @@ func (opt *Optimizer) runCommand(ctx context.Context, name string, args ...strin
 	return executor.Run(ctx, name, args)
 }
 
-func (opt *Optimizer) fetchRoutes(ctx context.Context, args ...string) ([]string, error) {
+func (opt *Optimizer) fetchRouteLinesFromCommand(ctx context.Context, args ...string) ([]string, error) {
 	output, err := opt.runIPCommand(ctx, args...)
 	if err != nil {
 		return nil, err
@@ -331,54 +489,6 @@ func (opt *Optimizer) commandContext(parent context.Context) (context.Context, c
 	return context.WithTimeout(parent, timeout)
 }
 
-func (opt *Optimizer) filterRoutes(lines []string, predicate routeFilter) []string {
-	result := make([]string, 0, len(lines))
-	for _, raw := range lines {
-		line := strings.TrimSpace(raw)
-		if predicate(line) {
-			result = append(result, line)
-		}
-	}
-	return result
-}
-
-func (opt *Optimizer) applyRoutes(ctx context.Context, routes []string, params []string, category string) (int, int, error) {
-	if len(routes) == 0 {
-		return 0, 0, nil
-	}
-
-	optimized := 0
-	failures := 0
-	var firstErr error
-
-	for _, route := range routes {
-		if route == "" {
-			continue
-		}
-		routeLine := opt.cleanRouteLine(route)
-		if routeLine == "" {
-			continue
-		}
-		if err := opt.applyRouteChange(ctx, routeLine, params...); err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			if opt.logger != nil {
-				opt.logger.Debug("route optimization skipped",
-					slog.String("category", category),
-					slog.String("route", routeLine),
-					slog.String("error", err.Error()))
-			}
-			failures++
-			continue
-		}
-		optimized++
-		if opt.logger != nil {
-			opt.logger.Debug("route optimization applied",
-				slog.String("category", category),
-				slog.String("route", routeLine))
-		}
-	}
-
-	return optimized, failures, firstErr
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

@@ -65,12 +65,17 @@ func NewShaperWithDependencies(logger *slog.Logger, settings Settings, netlinkCl
 func (s *Shaper) Apply(ctx context.Context) error {
 	// First, optimize routing tables for better TCP performance
 	if err := s.routeOptimizer.Optimize(ctx); err != nil {
+		if isContextError(err) {
+			return err
+		}
+
+		optErr := fmt.Errorf("optimize routes: %w", err)
 		s.handleCategorizedError("route optimization failed", "", terr.New(
 			terr.CategoryRecoverable,
-			fmt.Errorf("optimize routes: %w", err),
+			optErr,
 			terr.ErrorContext{Operation: "optimize_routes"},
 		), terr.CategoryRecoverable)
-		// Continue with traffic shaping even if route optimization fails
+		return optErr
 	}
 
 	return s.applyInterfaces(ctx, nil)
