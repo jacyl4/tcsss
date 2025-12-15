@@ -16,7 +16,31 @@ import (
 
 // Watch listens to netlink events and reapplies traffic shaping when needed.
 func (s *Shaper) Watch(ctx context.Context) (err error) {
+	s.watchMu.Lock()
+	if s.watchCancel != nil {
+		s.watchMu.Unlock()
+		return fmt.Errorf("watch already running")
+	}
+	watchCtx, cancel := context.WithCancel(ctx)
+	s.watchCancel = cancel
+	s.watchDone = make(chan struct{})
+	s.watchMu.Unlock()
+
 	defer func() {
+		s.watchMu.Lock()
+		cancel := s.watchCancel
+		s.watchCancel = nil
+		done := s.watchDone
+		s.watchDone = nil
+		s.watchMu.Unlock()
+
+		if cancel != nil {
+			cancel()
+		}
+		if done != nil {
+			close(done)
+		}
+
 		if r := recover(); r != nil {
 			stack := debug.Stack()
 			if s.logger != nil {
@@ -36,7 +60,7 @@ func (s *Shaper) Watch(ctx context.Context) (err error) {
 	}
 	defer subs.Close()
 
-	return s.watchLoop(ctx, subs)
+	return s.watchLoop(watchCtx, subs)
 }
 
 type netlinkSubscriptions struct {
@@ -261,4 +285,33 @@ func (s *Shaper) invalidateEthtoolCacheFromAddrUpdate(update netlink.AddrUpdate)
 	}
 
 	s.invalidateEthtoolCacheAll()
+}
+
+// StopWatch stops the watcher loop gracefully by cancelling its context.
+func (s *Shaper) StopWatch() {
+	s.watchMu.Lock()
+	cancel := s.watchCancel
+	s.watchMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// WaitWatch blocks until the watcher loop exits or the context times out.
+func (s *Shaper) WaitWatch(ctx context.Context) error {
+	s.watchMu.Lock()
+	done := s.watchDone
+	s.watchMu.Unlock()
+
+	if done == nil {
+		return nil
+	}
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

@@ -28,6 +28,9 @@ type Shaper struct {
 	ethtoolCache      map[string]*ethtoolCacheEntry
 	ethtoolCacheMu    sync.RWMutex
 	ethtoolCacheTTL   time.Duration
+	watchMu           sync.Mutex
+	watchCancel       context.CancelFunc
+	watchDone         chan struct{}
 }
 
 // NewShaper constructs a traffic Shaper.

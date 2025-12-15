@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"github.com/coreos/go-systemd/v22/daemon"
 )
@@ -26,6 +27,8 @@ type LimitsService interface {
 type TrafficService interface {
 	Apply(ctx context.Context) error
 	Watch(ctx context.Context) error
+	StopWatch()
+	WaitWatch(ctx context.Context) error
 }
 
 // Dependencies groups the external services required by the daemon.
@@ -127,6 +130,17 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 
 	select {
 	case <-ctx.Done():
+		if d.logger != nil {
+			d.logger.Info("shutdown signal received, stopping watchers")
+		}
+		if d.trafficManager != nil {
+			d.trafficManager.StopWatch()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if err := d.trafficManager.WaitWatch(shutdownCtx); err != nil && d.logger != nil && !errors.Is(err, context.DeadlineExceeded) {
+				d.logger.Warn("traffic watcher did not stop cleanly", slog.String("error", err.Error()))
+			}
+			cancel()
+		}
 	case err := <-watchErrs:
 		d.logger.Error("watch loop failed", slog.String("error", err.Error()))
 		return err
