@@ -23,6 +23,7 @@ import (
 	"tcsss/internal/version"
 )
 
+// main bootstraps tcsss: parse flags, validate the host, prepare traffic config, then run the daemon.
 func main() {
 	var confDirFlag string
 	var modeFlag string
@@ -40,11 +41,6 @@ func main() {
 
 	startTime := time.Now()
 
-	legacyModeArg := ""
-	if flag.NArg() > 0 {
-		legacyModeArg = flag.Arg(0)
-	}
-
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	stageDurations := map[string]time.Duration{}
@@ -60,15 +56,12 @@ func main() {
 	logger.Info("using template directory", slog.String("path", templateDir))
 
 	mode := strings.TrimSpace(modeFlag)
-	if mode == "" && strings.TrimSpace(legacyModeArg) != "" {
-		mode = legacyModeArg
-		logger.Warn("legacy mode argument detected; use --mode flag instead", slog.String("argument", legacyModeArg))
-	}
 
 	ctx, cancel := signalContext(logger)
 	defer cancel()
 
 	kernelStart := time.Now()
+	// Kernel modules need to be present before any further setup.
 	if err := detector.ValidateKernelModules(logger); err != nil {
 		logger.Error("kernel module validation failed", slog.String("error", err.Error()))
 		os.Exit(1)
@@ -84,6 +77,7 @@ func main() {
 	runtimeCh := make(chan error, 1)
 	memoryCh := make(chan memoryResult, 1)
 
+	// Run runtime validation and memory detection in parallel to shorten startup time.
 	go func() {
 		runtimeCh <- detector.ValidateRuntime(logger)
 	}()
@@ -101,6 +95,7 @@ func main() {
 	var memInfo detector.MemoryInfo
 	memResult := <-memoryCh
 	if memResult.err != nil {
+		// Memory detection failures should not block startup; fall back to defaults.
 		logger.Warn("memory detection failed; proceeding with defaults", slog.String("error", memResult.err.Error()))
 	} else {
 		memInfo = memResult.info
@@ -124,6 +119,7 @@ func main() {
 		},
 	}
 
+	// Build dependencies for the daemon lifecycle.
 	sysctlApplier := syslimit.NewSysctlConfApplier(logger, templateDir, initConfig.Mode)
 
 	limitsApplier := syslimit.NewLimitsConfApplier(logger, templateDir)
@@ -158,6 +154,7 @@ func main() {
 	logger.Info("shutdown complete")
 }
 
+// signalContext returns a context canceled on the first signal and forces exit on the second.
 func signalContext(logger *slog.Logger) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -184,12 +181,10 @@ func signalContext(logger *slog.Logger) (context.Context, context.CancelFunc) {
 		}
 	}()
 
-	return ctx, func() {
-		cancel()
-		time.Sleep(50 * time.Millisecond)
-	}
+	return ctx, cancel
 }
 
+// resolveTemplateDir selects a configuration directory in priority order: flag, env, default, executable-relative.
 func resolveTemplateDir(confFlag string) (string, error) {
 	if confFlag != "" {
 		if err := validateTemplateDir(confFlag); err != nil {
@@ -220,6 +215,7 @@ func resolveTemplateDir(confFlag string) (string, error) {
 	return "", fmt.Errorf("no valid template directory found")
 }
 
+// validateTemplateDir ensures the directory exists, contains required files, and includes traffic and memory templates.
 func validateTemplateDir(dir string) error {
 	info, err := os.Stat(dir)
 	if err != nil {
