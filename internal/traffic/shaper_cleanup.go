@@ -33,11 +33,11 @@ func (s *Shaper) determineRequiredIfbs(links []netlink.Link) map[string]struct{}
 		}
 		class := s.classifier.Classify(attrs)
 		switch class {
-		case classLoopback, classExternalPhysical, classExternalVirtual, classInternalVirtual:
+		case classLoopback, classRoutablePhysical, classRoutableVirtual:
 			// These classes need IFB devices for ingress shaping
 			required[truncateIfb(IfbPrefix+name)] = struct{}{}
-		case classInternalVirtualSkip:
-			// Internal virtual interfaces with skip prefixes are ignored
+		case classSkip:
+			// Skipped interfaces do not need IFB devices
 			continue
 		}
 	}

@@ -15,13 +15,12 @@ type ifaceClass int
 const (
 	classUnknown ifaceClass = iota
 	classLoopback
-	classExternalPhysical    // Physical interface that carries external traffic
-	classExternalVirtual     // Virtual interface that carries external traffic
-	classInternalVirtual     // Virtual interface that carries only internal traffic
-	classInternalVirtualSkip // Virtual interface skipped entirely (matches skip prefixes)
+	classRoutablePhysical // Physical interface present in routing table
+	classRoutableVirtual  // Virtual interface present in routing table
+	classSkip             // Interfaces skipped entirely (prefix or not routable)
 )
 
-const defaultExternalRefreshInterval = 30 * time.Second
+const defaultRoutableRefreshInterval = 30 * time.Second
 
 // InterfaceClassifier provides interface classification with routing awareness.
 type InterfaceClassifier struct {
@@ -29,7 +28,7 @@ type InterfaceClassifier struct {
 	netlinkClient NetlinkClient
 
 	mu                  sync.RWMutex
-	externalLinkIndexes map[int]struct{} // link index -> has default route
+	routableLinkIndexes map[int]struct{} // link index -> present in route table
 	virtualCache        map[string]bool  // interface name -> is virtual
 	lastRefresh         time.Time
 	refreshInterval     time.Duration
@@ -40,9 +39,9 @@ func NewInterfaceClassifier(logger *slog.Logger, netlinkClient NetlinkClient) *I
 	return &InterfaceClassifier{
 		logger:              logger,
 		netlinkClient:       netlinkClient,
-		externalLinkIndexes: make(map[int]struct{}),
+		routableLinkIndexes: make(map[int]struct{}),
 		virtualCache:        make(map[string]bool),
-		refreshInterval:     defaultExternalRefreshInterval,
+		refreshInterval:     defaultRoutableRefreshInterval,
 	}
 }
 
@@ -50,16 +49,15 @@ func NewInterfaceClassifier(logger *slog.Logger, netlinkClient NetlinkClient) *I
 //
 // Classification priority:
 //  1. Loopback check (highest priority)
-//  2. Internal skip patterns (exclude internal-only virtual interfaces)
-//  3. External communication check (interfaces with default routes)
-//  4. Virtual/Physical hardware detection (based on driver and device type)
+//  2. Skip patterns (ifb, docker, veth, bridge, etc.)
+//  3. Routable check (must appear in routing table)
+//  4. Virtual/Physical detection (for ethtool differences)
 //
 // Classification affects which traffic shaping profile is applied:
 //   - classLoopback: localhost interface (lo), high MTU and aggressive tuning
-//   - classExternalPhysical: physical NICs handling internet traffic
-//   - classExternalVirtual: virtual interfaces (docker, veth) carrying external traffic
-//   - classInternalVirtual: virtual interfaces for container/VM internal networks
-//   - classInternalVirtualSkip: ignored virtual interfaces (cbr0, cni0, etc.)
+//   - classRoutablePhysical: physical NICs in routing table (GRO on)
+//   - classRoutableVirtual: virtual interfaces in routing table (GRO off)
+//   - classSkip: ignored interfaces (prefix skip or not routable)
 func (ic *InterfaceClassifier) Classify(attrs *netlink.LinkAttrs) ifaceClass {
 	if attrs == nil {
 		return classUnknown
@@ -75,39 +73,26 @@ func (ic *InterfaceClassifier) Classify(attrs *netlink.LinkAttrs) ifaceClass {
 		return classUnknown
 	}
 
-	// 2. Check if interface should be skipped (internal-only patterns)
-	if hasInternalVirtualPrefix(name) {
-		ic.logDebug("interface classified as internal virtual skip (name prefix)", name)
-		return classInternalVirtualSkip
+	// 2. Skip internal-only or managed prefixes early
+	if hasSkipPrefix(name) {
+		ic.logDebug("interface skipped (prefix match)", name)
+		return classSkip
 	}
 
-	// 3. Detect hardware type (virtual or physical)
-	isVirtual := ic.isVirtualInterface(name)
-
-	// 4. Check if interface handles external traffic
-	isExternal := ic.isExternalInterface(attrs.Index, name)
-
-	// 5. Classify based on combination
-	if isExternal {
-		if isVirtual {
-			ic.logDebug("interface classified as external virtual", name)
-			return classExternalVirtual
-		}
-		ic.logDebug("interface classified as external physical", name)
-		return classExternalPhysical
+	// 3. Require presence in routing table
+	if !ic.isRoutable(attrs.Index, name) {
+		ic.logDebug("interface skipped (not in route table)", name)
+		return classSkip
 	}
 
-	// Internal virtual interfaces (not caught by name prefix)
-	if isVirtual {
-		ic.logDebug("interface classified as internal virtual", name)
-		return classInternalVirtual
+	// 4. Hardware detection only influences offload configuration
+	if ic.isVirtualInterface(name) {
+		ic.logDebug("interface classified as routable virtual", name)
+		return classRoutableVirtual
 	}
 
-	// Remaining physical interfaces are treated as external by default.
-	// Physical NICs are expected to handle outbound traffic even if routes
-	// are not yet visible when classification runs.
-	ic.logDebug("interface classified as external physical (fallback)", name)
-	return classExternalPhysical
+	ic.logDebug("interface classified as routable physical", name)
+	return classRoutablePhysical
 }
 
 func (ic *InterfaceClassifier) logDebug(message, iface string) {

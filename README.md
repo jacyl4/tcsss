@@ -221,7 +221,7 @@ daemon.Run(ctx)
 
 ### Traffic Shaping Strategy
 
-- Interface classification groups loopback, external physical, and external virtual devices while skipping internal-only virtual interfaces by using name prefixes, sysfs paths, driver metadata, and vendor information.
+- Interface classification targets loopback plus routable interfaces from the kernel routing table, skips a small prefix set (`ifb`/`docker`/`veth`/`br`/`virbr`), and only distinguishes physical vs. virtual for ethtool GRO on/off.
 - CAKE profiles set MTU, RTT, Diffserv, and ACK filtering presets per interface category.
 - Ingress shaping is implemented with IFB mirror devices.
 

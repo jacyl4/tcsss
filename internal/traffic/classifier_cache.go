@@ -7,9 +7,9 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
-// RefreshExternalInterfaces updates the cache of external-facing interfaces.
+// RefreshRoutableInterfaces updates the cache of interfaces present in routing tables.
 // Call this before batch classification to improve performance.
-func (ic *InterfaceClassifier) RefreshExternalInterfaces() error {
+func (ic *InterfaceClassifier) RefreshRoutableInterfaces() error {
 	interval := ic.refreshInterval
 	if interval > 0 {
 		ic.mu.RLock()
@@ -19,7 +19,7 @@ func (ic *InterfaceClassifier) RefreshExternalInterfaces() error {
 			since := time.Since(last)
 			if since < interval {
 				if ic.logger != nil {
-					ic.logger.Debug("skipping external interface refresh",
+					ic.logger.Debug("skipping routable interface refresh",
 						slog.Duration("since_last_refresh", since),
 						slog.Duration("refresh_interval", interval))
 				}
@@ -34,7 +34,7 @@ func (ic *InterfaceClassifier) RefreshExternalInterfaces() error {
 		routes, err := ic.netlinkClient.RouteList(nil, family)
 		if err != nil {
 			if ic.logger != nil {
-				ic.logger.Warn("failed to list routes for external interface detection",
+				ic.logger.Warn("failed to list routes for routable interface detection",
 					slog.String("family", familyLabel),
 					slog.String("error", err.Error()))
 			}
@@ -42,7 +42,7 @@ func (ic *InterfaceClassifier) RefreshExternalInterfaces() error {
 		}
 
 		for _, route := range routes {
-			if !isDefaultRoute(route) || route.LinkIndex <= 0 {
+			if route.LinkIndex <= 0 {
 				continue
 			}
 
@@ -50,16 +50,14 @@ func (ic *InterfaceClassifier) RefreshExternalInterfaces() error {
 
 			if ic.logger != nil {
 				if attrs, err := safeGetLinkAttrs(ic.netlinkClient, route.LinkIndex); err == nil {
-					ic.logger.Debug("detected default route for interface",
+					ic.logger.Debug("detected route for interface",
 						slog.String("interface", attrs.Name),
 						slog.Int("link_index", route.LinkIndex),
-						slog.String("family", familyLabel),
-						slog.String("gateway", route.Gw.String()))
+						slog.String("family", familyLabel))
 				} else {
-					ic.logger.Debug("detected default route for link index",
+					ic.logger.Debug("detected route for link index",
 						slog.Int("link_index", route.LinkIndex),
-						slog.String("family", familyLabel),
-						slog.String("gateway", route.Gw.String()))
+						slog.String("family", familyLabel))
 				}
 			}
 		}
@@ -69,46 +67,27 @@ func (ic *InterfaceClassifier) RefreshExternalInterfaces() error {
 	fetchRoutes(netlink.FAMILY_V6, "ipv6")
 
 	ic.mu.Lock()
-	ic.externalLinkIndexes = linkIndexes
+	ic.routableLinkIndexes = linkIndexes
 	ic.lastRefresh = time.Now()
 	ic.mu.Unlock()
 
 	if ic.logger != nil {
-		ic.logger.Info("refreshed external interface cache",
-			slog.Int("external_interfaces", len(linkIndexes)),
+		ic.logger.Info("refreshed routable interface cache",
+			slog.Int("routable_interfaces", len(linkIndexes)),
 			slog.Duration("refresh_interval", interval))
 	}
 
 	return nil
 }
 
-// isExternalInterface checks if an interface handles external traffic.
-// An interface is external if:
-//  1. It has a default route
-//  2. Its name matches external virtual patterns (VPN, tunnels)
-//  3. It's cached as external from previous route check
-func (ic *InterfaceClassifier) isExternalInterface(linkIndex int, name string) bool {
-	// Check explicit external virtual patterns (VPN, tunnels)
-	if hasExternalVirtualPrefix(name) {
-		return true
-	}
-
+// isRoutable checks if an interface appears in routing tables.
+func (ic *InterfaceClassifier) isRoutable(linkIndex int, _ string) bool {
 	if linkIndex <= 0 {
 		return false
 	}
 
 	ic.mu.RLock()
-	_, ok := ic.externalLinkIndexes[linkIndex]
+	_, ok := ic.routableLinkIndexes[linkIndex]
 	ic.mu.RUnlock()
 	return ok
-}
-
-// isDefaultRoute reports whether the provided route represents a default route (0.0.0.0/0 or ::/0).
-func isDefaultRoute(route netlink.Route) bool {
-	if route.Dst == nil {
-		return true
-	}
-
-	ones, bits := route.Dst.Mask.Size()
-	return bits > 0 && ones == 0
 }

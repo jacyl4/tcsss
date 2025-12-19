@@ -63,8 +63,8 @@ func (s *Shaper) listAndPrepareLinks(ctx context.Context) ([]netlink.Link, error
 		)
 	}
 
-	if err := s.classifier.RefreshExternalInterfaces(); err != nil && s.logger != nil {
-		s.logger.Warn("failed to refresh external interface cache", slog.String("error", err.Error()))
+	if err := s.classifier.RefreshRoutableInterfaces(); err != nil && s.logger != nil {
+		s.logger.Warn("failed to refresh routable interface cache", slog.String("error", err.Error()))
 	}
 
 	return links, nil
@@ -262,15 +262,13 @@ func (s *Shaper) processLink(ctx context.Context, link netlink.Link, only map[st
 	switch class {
 	case classLoopback:
 		return true, s.applyProfile(ctx, name, attrs, s.profiles.loopback, "loopback", "loopback configure failed")
-	case classExternalPhysical:
-		return true, s.applyProfile(ctx, name, attrs, s.profiles.externalPhysical, "external-physical", "external physical configure failed")
-	case classExternalVirtual:
-		return true, s.applyProfile(ctx, name, attrs, s.profiles.externalVirtual, "external-virtual", "external virtual configure failed")
-	case classInternalVirtual:
-		return true, s.applyProfile(ctx, name, attrs, s.profiles.internalVirtual, "internal-virtual", "internal virtual configure failed")
-	case classInternalVirtualSkip:
+	case classRoutablePhysical:
+		return true, s.applyProfile(ctx, name, attrs, s.profiles.routablePhysical, "routable-physical", "routable physical configure failed")
+	case classRoutableVirtual:
+		return true, s.applyProfile(ctx, name, attrs, s.profiles.routableVirtual, "routable-virtual", "routable virtual configure failed")
+	case classSkip:
 		if s.logger != nil {
-			s.logger.Debug("skipping internal virtual interface", slog.String("interface", name))
+			s.logger.Debug("skipping interface", slog.String("interface", name))
 		}
 		return true, nil
 	default:

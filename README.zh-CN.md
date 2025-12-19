@@ -218,7 +218,7 @@ daemon.Run(ctx)
 
 ### 流量整形策略
 
-- 接口分类：loopback / 外部物理 / 外部虚拟 / 内部虚拟跳过，基于名称前缀、sysfs、驱动与供应商信息。
+- 接口分类：只处理路由表中的接口（loopback、可路由物理/虚拟），跳过 ifb/docker/veth/br/virbr 前缀；仅在 ethtool 配置上区分物理/虚拟（GRO 开/关）。
 - CAKE 配置：针对不同接口设置 MTU、RTT、Diffserv、ACK 过滤等预设。
 - Ingress 整形：通过 IFB 镜像设备实现。
 
