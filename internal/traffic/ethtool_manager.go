@@ -41,16 +41,16 @@ func (s *Shaper) ensureOffloads(ctx context.Context, iface string, settings []of
 
 	var batched []string
 	desiredStates := make(map[string]string)
-	for _, s := range settings {
-		readKey := mapDesiredToReadKey(s.feature)
-		setKey := normalizeSetFeatureName(s.feature)
+	for _, setting := range settings {
+		readKey := mapDesiredToReadKey(setting.feature)
+		setKey := normalizeSetFeatureName(setting.feature)
 		if readKey == "" || setKey == "" {
 			continue
 		}
 		if fixed[readKey] {
 			continue
 		}
-		desiredState := strings.ToLower(s.state)
+		desiredState := strings.ToLower(setting.state)
 		if curState, ok := cur[readKey]; ok && strings.EqualFold(curState, desiredState) {
 			continue
 		}

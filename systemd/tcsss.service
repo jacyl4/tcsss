@@ -14,10 +14,6 @@ KillSignal=SIGTERM
 FinalKillSignal=SIGKILL
 TimeoutStopSec=30s
 
-SyslogIdentifier=tcsss
-StandardOutput=append:/var/log/tcsss/tcsss.log
-StandardError=append:/var/log/tcsss/tcsss.log
-
 ExecStart=/usr/local/bin/tcsss
 Restart=on-failure
 RestartSec=5

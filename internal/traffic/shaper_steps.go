@@ -83,8 +83,7 @@ func (s *Shaper) configureIngressAndIfbStep(ctx context.Context, pc *profileCont
 		Kind:     "matchall",
 		Actions:  []string{"action", "mirred", "egress", "redirect", "dev", pc.ifbName},
 	}
-	_ = s.runQuiet(ctx, "tc", filter.DeleteArgs()...)
-	tcBatch = append(tcBatch, filter.AddArgs())
+	tcBatch = append(tcBatch, filter.ReplaceArgs())
 
 	if err := s.runTcBatch(ctx, tcBatch); err != nil {
 		return terr.WrapRecoverable(
