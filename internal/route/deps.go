@@ -17,7 +17,6 @@ type NetlinkClient interface {
 	LinkByIndex(index int) (netlink.Link, error)
 	LinkDel(link netlink.Link) error
 	RouteList(link netlink.Link, family int) ([]netlink.Route, error)
-	RouteListFiltered(family int, filter *netlink.Route, filterMask uint64) ([]netlink.Route, error)
 	RouteReplace(route *netlink.Route) error
 	LinkSubscribeWithOptions(ch chan netlink.LinkUpdate, done chan struct{}, opts netlink.LinkSubscribeOptions) error
 	AddrSubscribeWithOptions(ch chan netlink.AddrUpdate, done chan struct{}, opts netlink.AddrSubscribeOptions) error

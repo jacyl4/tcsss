@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -20,33 +19,22 @@ import (
 	"tcsss/internal/route"
 	"tcsss/internal/syslimit"
 	"tcsss/internal/traffic"
-	"tcsss/internal/version"
 )
 
-// main bootstraps tcsss: parse flags, validate the host, prepare traffic config, then run the daemon.
 func main() {
 	var confDirFlag string
 	var modeFlag string
-	var showVersion bool
 
 	flag.StringVar(&confDirFlag, "conf", "", "configuration directory path (default: /etc/tcsss)")
 	flag.StringVar(&modeFlag, "mode", "", "traffic mode: client, server, or aggregate")
-	flag.BoolVar(&showVersion, "v", false, "print version and exit")
 	flag.Parse()
 
-	if showVersion {
-		fmt.Printf("tcsss version %s\n", version.Current)
-		return
+	legacyModeArg := ""
+	if flag.NArg() > 0 {
+		legacyModeArg = flag.Arg(0)
 	}
-
-	startTime := time.Now()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
-	stageDurations := map[string]time.Duration{}
-	recordDuration := func(stage string, since time.Time) {
-		stageDurations[stage] = time.Since(since)
-	}
 
 	templateDir, err := resolveTemplateDir(confDirFlag)
 	if err != nil {
@@ -56,60 +44,29 @@ func main() {
 	logger.Info("using template directory", slog.String("path", templateDir))
 
 	mode := strings.TrimSpace(modeFlag)
+	if mode == "" && strings.TrimSpace(legacyModeArg) != "" {
+		mode = legacyModeArg
+		logger.Warn("legacy mode argument detected; use --mode flag instead", slog.String("argument", legacyModeArg))
+	}
 
-	ctx, cancel := signalContext(logger)
+	ctx, cancel := signalContext()
 	defer cancel()
 
-	kernelStart := time.Now()
-	// Kernel modules need to be present before any further setup.
 	if err := detector.ValidateKernelModules(logger); err != nil {
 		logger.Error("kernel module validation failed", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	recordDuration("kernel_modules", kernelStart)
 
-	validationStart := time.Now()
-	type memoryResult struct {
-		info detector.MemoryInfo
-		err  error
-	}
-
-	runtimeCh := make(chan error, 1)
-	memoryCh := make(chan memoryResult, 1)
-
-	// Run runtime validation and memory detection in parallel to shorten startup time.
-	go func() {
-		runtimeCh <- detector.ValidateRuntime(logger)
-	}()
-
-	go func() {
-		info, detectErr := detector.DetectMemoryInfo(logger)
-		memoryCh <- memoryResult{info: info, err: detectErr}
-	}()
-
-	if err := <-runtimeCh; err != nil {
+	if err := detector.ValidateRuntime(logger); err != nil {
 		logger.Error("runtime validation failed", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
-	var memInfo detector.MemoryInfo
-	memResult := <-memoryCh
-	if memResult.err != nil {
-		// Memory detection failures should not block startup; fall back to defaults.
-		logger.Warn("memory detection failed; proceeding with defaults", slog.String("error", memResult.err.Error()))
-	} else {
-		memInfo = memResult.info
-	}
-
-	recordDuration("runtime_and_memory", validationStart)
-
-	configStart := time.Now()
 	initConfig, err := configtemplates.LoadTrafficInitConfig(templateDir, mode)
 	if err != nil {
 		logger.Warn("falling back to default traffic template", slog.String("error", err.Error()), slog.String("fallback_mode", string(initConfig.Mode)))
 	}
 	logger.Info("traffic template applied", slog.String("mode", string(initConfig.Mode)))
-	recordDuration("traffic_template_load", configStart)
 
 	trafficSettings := traffic.Settings{
 		Routes: route.WindowConfig{
@@ -119,72 +76,49 @@ func main() {
 		},
 	}
 
-	// Build dependencies for the daemon lifecycle.
 	sysctlApplier := syslimit.NewSysctlConfApplier(logger, templateDir, initConfig.Mode)
 
 	limitsApplier := syslimit.NewLimitsConfApplier(logger, templateDir)
+
+	rlimitApplier := syslimit.NewRlimitApplier(logger, templateDir)
 
 	trafficShaper := traffic.NewShaper(logger, trafficSettings)
 
 	daemon := app.NewDaemon(app.Dependencies{
 		SysctlApplier:  sysctlApplier,
 		LimitsApplier:  limitsApplier,
+		RlimitApplier:  rlimitApplier,
 		TrafficManager: trafficShaper,
 		Logger:         logger,
 	})
 
-	logger.Info("startup checks completed",
-		slog.Duration("total", time.Since(startTime)),
-		slog.Duration("kernel_modules", stageDurations["kernel_modules"]),
-		slog.Duration("runtime_and_memory", stageDurations["runtime_and_memory"]),
-		slog.Duration("traffic_template_load", stageDurations["traffic_template_load"]),
-		slog.Float64("memory_gb", memInfo.TotalGB),
-		slog.String("memory_tier", memInfo.Tier.String()),
-		slog.String("mode", string(initConfig.Mode)),
-	)
-
 	if err := daemon.Run(ctx); err != nil {
-		if errors.Is(err, context.Canceled) {
-			logger.Info("shutdown complete")
-			return
-		}
 		logger.Error("daemon terminated", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	logger.Info("shutdown complete")
 }
 
-// signalContext returns a context canceled on the first signal and forces exit on the second.
-func signalContext(logger *slog.Logger) (context.Context, context.CancelFunc) {
+func signalContext() (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	signals := make(chan os.Signal, 2)
+	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 	go func() {
 		defer signal.Stop(signals)
 		select {
-		case sig := <-signals:
-			if logger != nil {
-				logger.Info("signal received, shutting down", slog.String("signal", sig.String()))
-			}
+		case <-signals:
 			cancel()
-			select {
-			case sig := <-signals:
-				if logger != nil {
-					logger.Warn("second signal received, forcing exit", slog.String("signal", sig.String()))
-				}
-				os.Exit(1)
-			case <-ctx.Done():
-			}
 		case <-ctx.Done():
 		}
 	}()
 
-	return ctx, cancel
+	return ctx, func() {
+		cancel()
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
-// resolveTemplateDir selects a configuration directory in priority order: flag, env, default, executable-relative.
 func resolveTemplateDir(confFlag string) (string, error) {
 	if confFlag != "" {
 		if err := validateTemplateDir(confFlag); err != nil {
@@ -215,7 +149,6 @@ func resolveTemplateDir(confFlag string) (string, error) {
 	return "", fmt.Errorf("no valid template directory found")
 }
 
-// validateTemplateDir ensures the directory exists, contains required files, and includes traffic and memory templates.
 func validateTemplateDir(dir string) error {
 	info, err := os.Stat(dir)
 	if err != nil {

@@ -8,13 +8,15 @@ import (
 	"os"
 	"runtime/debug"
 	"sync"
-	"time"
-
-	"github.com/coreos/go-systemd/v22/daemon"
 )
 
 // SysctlService defines system limit reconciliation behavior.
 type SysctlService interface {
+	Apply(ctx context.Context) error
+}
+
+// RlimitService defines process resource limit reconciliation behavior.
+type RlimitService interface {
 	Apply(ctx context.Context) error
 }
 
@@ -27,26 +29,24 @@ type LimitsService interface {
 type TrafficService interface {
 	Apply(ctx context.Context) error
 	Watch(ctx context.Context) error
-	StopWatch()
-	WaitWatch(ctx context.Context) error
 }
 
 // Dependencies groups the external services required by the daemon.
 type Dependencies struct {
 	SysctlApplier  SysctlService
+	RlimitApplier  RlimitService
 	LimitsApplier  LimitsService
 	TrafficManager TrafficService
 	Logger         *slog.Logger
-	ReadyNotifier  ReadyNotifier
 }
 
 // Daemon coordinates subsystems and event loops.
 type Daemon struct {
 	sysctlApplier  SysctlService
+	rlimitApplier  RlimitService
 	limitsApplier  LimitsService
 	trafficManager TrafficService
 	logger         *slog.Logger
-	readyNotifier  ReadyNotifier
 }
 
 // NewDaemon constructs a Daemon with validated dependencies.
@@ -54,15 +54,12 @@ func NewDaemon(deps Dependencies) *Daemon {
 	if deps.Logger == nil {
 		deps.Logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	}
-	if deps.ReadyNotifier == nil {
-		deps.ReadyNotifier = systemdNotifier{}
-	}
 	return &Daemon{
 		sysctlApplier:  deps.SysctlApplier,
+		rlimitApplier:  deps.RlimitApplier,
 		limitsApplier:  deps.LimitsApplier,
 		trafficManager: deps.TrafficManager,
 		logger:         deps.Logger,
-		readyNotifier:  deps.ReadyNotifier,
 	}
 }
 
@@ -104,7 +101,17 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		}
 	}
 
-	// Priority 3: Apply traffic shaping and start watch loop
+	// Priority 3: Apply current process resource limits (rlimit)
+	// Immediate effect on running process - should be last
+	// Ensures the daemon itself has proper limits
+	if d.rlimitApplier != nil {
+		if err := d.rlimitApplier.Apply(ctx); err != nil {
+			d.logger.Error("rlimit apply failed", slog.String("error", err.Error()))
+			return err
+		}
+	}
+
+	// Priority 4: Apply traffic shaping and start watch loop
 	var wg sync.WaitGroup
 	watchErrs := make(chan error, 1)
 
@@ -126,100 +133,13 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		}()
 	}
 
-	d.notifyReady()
-
-	const watcherShutdownTimeout = 5 * time.Second
-
 	select {
 	case <-ctx.Done():
-		d.notifyStopping()
-		if d.logger != nil {
-			d.logger.Info("shutdown signal received, stopping watchers")
-		}
-		if d.trafficManager != nil {
-			d.trafficManager.StopWatch()
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			if err := d.trafficManager.WaitWatch(shutdownCtx); err != nil && d.logger != nil && !errors.Is(err, context.DeadlineExceeded) {
-				d.logger.Warn("traffic watcher did not stop cleanly", slog.String("error", err.Error()))
-			}
-			cancel()
-		}
 	case err := <-watchErrs:
 		d.logger.Error("watch loop failed", slog.String("error", err.Error()))
 		return err
 	}
 
-	waitDone := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(waitDone)
-	}()
-
-	select {
-	case <-waitDone:
-	case <-time.After(watcherShutdownTimeout):
-		if d.logger != nil {
-			d.logger.Warn("traffic watcher shutdown timed out; forcing exit")
-		}
-	}
-
+	wg.Wait()
 	return ctx.Err()
-}
-
-// ReadyNotifier abstracts systemd readiness notifications for easier testing.
-type ReadyNotifier interface {
-	NotifyReady() (bool, error)
-	NotifyStopping() (bool, error)
-}
-
-type systemdNotifier struct{}
-
-func (systemdNotifier) NotifyReady() (bool, error) {
-	return daemon.SdNotify(false, daemon.SdNotifyReady)
-}
-
-func (systemdNotifier) NotifyStopping() (bool, error) {
-	return daemon.SdNotify(false, daemon.SdNotifyStopping)
-}
-
-func (d *Daemon) notifyReady() {
-	if d.readyNotifier == nil {
-		return
-	}
-	sent, err := d.readyNotifier.NotifyReady()
-	if err != nil {
-		if d.logger != nil {
-			d.logger.Warn("systemd readiness notification failed", slog.String("error", err.Error()))
-		}
-		return
-	}
-	if d.logger == nil {
-		return
-	}
-	if sent {
-		d.logger.Info("systemd notified: ready")
-	} else {
-		d.logger.Debug("systemd notify skipped (no NOTIFY_SOCKET)")
-	}
-}
-
-func (d *Daemon) notifyStopping() {
-	if d.readyNotifier == nil {
-		return
-	}
-	sent, err := d.readyNotifier.NotifyStopping()
-	if err != nil {
-		if d.logger != nil {
-			d.logger.Warn("systemd stopping notification failed", slog.String("error", err.Error()))
-		}
-		return
-	}
-	if d.logger == nil {
-		return
-	}
-	if sent {
-		d.logger.Info("systemd notified: stopping")
-	} else {
-		d.logger.Debug("systemd stopping notify skipped (no NOTIFY_SOCKET)")
-	}
 }

@@ -3,7 +3,6 @@ package traffic
 import (
 	"context"
 	"strings"
-	"time"
 
 	terr "tcsss/internal/errors"
 )
@@ -40,22 +39,19 @@ func (s *Shaper) ensureOffloads(ctx context.Context, iface string, settings []of
 	}
 
 	var batched []string
-	desiredStates := make(map[string]string)
-	for _, setting := range settings {
-		readKey := mapDesiredToReadKey(setting.feature)
-		setKey := normalizeSetFeatureName(setting.feature)
+	for _, s := range settings {
+		readKey := mapDesiredToReadKey(s.feature)
+		setKey := normalizeSetFeatureName(s.feature)
 		if readKey == "" || setKey == "" {
 			continue
 		}
 		if fixed[readKey] {
 			continue
 		}
-		desiredState := strings.ToLower(setting.state)
-		if curState, ok := cur[readKey]; ok && strings.EqualFold(curState, desiredState) {
+		if curState, ok := cur[readKey]; ok && strings.EqualFold(curState, s.state) {
 			continue
 		}
-		batched = append(batched, setKey, desiredState)
-		desiredStates[readKey] = desiredState
+		batched = append(batched, setKey, s.state)
 	}
 
 	if len(batched) == 0 {
@@ -70,36 +66,44 @@ func (s *Shaper) ensureOffloads(ctx context.Context, iface string, settings []of
 				"features": batched,
 			},
 		})
-		s.invalidateEthtoolCache(iface)
-		return
-	}
-
-	if len(desiredStates) > 0 {
-		for key, state := range desiredStates {
-			cur[key] = state
-		}
-		s.storeEthtoolCache(iface, cur, fixed)
 	}
 }
 
 // readEthtoolFeatures runs 'ethtool -k' and parses feature states and fixed flags
 func (s *Shaper) readEthtoolFeatures(ctx context.Context, iface string) (map[string]string, map[string]bool) {
-	features, fixed := s.loadEthtoolCache(iface)
-	if features != nil || fixed != nil {
-		return features, fixed
-	}
-
 	out, err := s.runGetOutput(ctx, "ethtool", "-k", iface)
 	if err != nil || out == "" {
 		return nil, nil
 	}
-
-	features, fixed = parseEthtoolFeatures(out)
-	if len(features) == 0 && len(fixed) == 0 {
-		return nil, nil
+	features := map[string]string{}
+	fixed := map[string]bool{}
+	lines := strings.Split(out, "\n")
+	for _, ln := range lines {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		// Skip header lines
+		if strings.HasPrefix(strings.ToLower(ln), "features for ") || strings.HasPrefix(strings.ToLower(ln), "offload parameters for ") {
+			continue
+		}
+		parts := strings.SplitN(ln, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		vstate := ""
+		if strings.Contains(strings.ToLower(val), "on") {
+			vstate = "on"
+		} else if strings.Contains(strings.ToLower(val), "off") {
+			vstate = "off"
+		}
+		features[key] = vstate
+		if strings.Contains(strings.ToLower(val), "[fixed]") {
+			fixed[key] = true
+		}
 	}
-
-	s.storeEthtoolCache(iface, features, fixed)
 	return features, fixed
 }
 
@@ -141,125 +145,4 @@ func mapDesiredToReadKey(name string) string {
 	default:
 		return ""
 	}
-}
-
-func parseEthtoolFeatures(out string) (map[string]string, map[string]bool) {
-	features := map[string]string{}
-	fixed := map[string]bool{}
-
-	lines := strings.Split(out, "\n")
-	for _, ln := range lines {
-		ln = strings.TrimSpace(ln)
-		if ln == "" {
-			continue
-		}
-		lower := strings.ToLower(ln)
-		if strings.HasPrefix(lower, "features for ") || strings.HasPrefix(lower, "offload parameters for ") {
-			continue
-		}
-		parts := strings.SplitN(ln, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		val := strings.TrimSpace(parts[1])
-		state := ""
-		valLower := strings.ToLower(val)
-		if strings.Contains(valLower, "on") {
-			state = "on"
-		} else if strings.Contains(valLower, "off") {
-			state = "off"
-		}
-		if key != "" {
-			features[key] = state
-			if strings.Contains(valLower, "[fixed]") {
-				fixed[key] = true
-			}
-		}
-	}
-
-	return features, fixed
-}
-
-type ethtoolCacheEntry struct {
-	features  map[string]string
-	fixed     map[string]bool
-	expiresAt time.Time
-}
-
-func (s *Shaper) loadEthtoolCache(iface string) (map[string]string, map[string]bool) {
-	if s == nil || iface == "" || s.ethtoolCacheTTL <= 0 {
-		return nil, nil
-	}
-
-	s.ethtoolCacheMu.RLock()
-	entry := s.ethtoolCache[iface]
-	s.ethtoolCacheMu.RUnlock()
-
-	if entry == nil {
-		return nil, nil
-	}
-
-	if time.Now().After(entry.expiresAt) {
-		s.invalidateEthtoolCache(iface)
-		return nil, nil
-	}
-
-	return cloneStringMap(entry.features), cloneBoolMap(entry.fixed)
-}
-
-func (s *Shaper) storeEthtoolCache(iface string, features map[string]string, fixed map[string]bool) {
-	if s == nil || iface == "" || s.ethtoolCacheTTL <= 0 {
-		return
-	}
-
-	entry := &ethtoolCacheEntry{
-		features:  cloneStringMap(features),
-		fixed:     cloneBoolMap(fixed),
-		expiresAt: time.Now().Add(s.ethtoolCacheTTL),
-	}
-
-	s.ethtoolCacheMu.Lock()
-	s.ethtoolCache[iface] = entry
-	s.ethtoolCacheMu.Unlock()
-}
-
-func (s *Shaper) invalidateEthtoolCache(iface string) {
-	if s == nil || iface == "" {
-		return
-	}
-	s.ethtoolCacheMu.Lock()
-	delete(s.ethtoolCache, iface)
-	s.ethtoolCacheMu.Unlock()
-}
-
-func (s *Shaper) invalidateEthtoolCacheAll() {
-	if s == nil {
-		return
-	}
-	s.ethtoolCacheMu.Lock()
-	s.ethtoolCache = make(map[string]*ethtoolCacheEntry)
-	s.ethtoolCacheMu.Unlock()
-}
-
-func cloneStringMap(src map[string]string) map[string]string {
-	if len(src) == 0 {
-		return map[string]string{}
-	}
-	dst := make(map[string]string, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
-}
-
-func cloneBoolMap(src map[string]bool) map[string]bool {
-	if len(src) == 0 {
-		return map[string]bool{}
-	}
-	dst := make(map[string]bool, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
 }

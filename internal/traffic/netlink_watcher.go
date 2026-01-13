@@ -16,31 +16,7 @@ import (
 
 // Watch listens to netlink events and reapplies traffic shaping when needed.
 func (s *Shaper) Watch(ctx context.Context) (err error) {
-	s.watchMu.Lock()
-	if s.watchCancel != nil {
-		s.watchMu.Unlock()
-		return fmt.Errorf("watch already running")
-	}
-	watchCtx, cancel := context.WithCancel(ctx)
-	s.watchCancel = cancel
-	s.watchDone = make(chan struct{})
-	s.watchMu.Unlock()
-
 	defer func() {
-		s.watchMu.Lock()
-		cancel := s.watchCancel
-		s.watchCancel = nil
-		done := s.watchDone
-		s.watchDone = nil
-		s.watchMu.Unlock()
-
-		if cancel != nil {
-			cancel()
-		}
-		if done != nil {
-			close(done)
-		}
-
 		if r := recover(); r != nil {
 			stack := debug.Stack()
 			if s.logger != nil {
@@ -60,7 +36,7 @@ func (s *Shaper) Watch(ctx context.Context) (err error) {
 	}
 	defer subs.Close()
 
-	return s.watchLoop(watchCtx, subs)
+	return s.watchLoop(ctx, subs)
 }
 
 type netlinkSubscriptions struct {
@@ -122,19 +98,14 @@ func (s *Shaper) watchLoop(ctx context.Context, subs *netlinkSubscriptions) erro
 			if !ok {
 				return errors.New("link subscription closed")
 			}
-			s.invalidateEthtoolCacheFromLinkUpdate(update)
 			pending.AddLink(update)
 		case update, ok := <-subs.addrs:
 			if !ok {
 				return errors.New("addr subscription closed")
 			}
-			s.invalidateEthtoolCacheFromAddrUpdate(update)
 			pending.AddAddr(update)
 		case <-applyTicker.C:
-			if err := s.applyPending(ctx, pending); err != nil {
-				if isContextError(err) {
-					return err
-				}
+			if err := s.applyPending(ctx, pending); err != nil && !errors.Is(err, context.Canceled) {
 				s.handleCategorizedError("reapply failed", "", err, terr.CategoryRecoverable)
 			}
 		case <-cleanupTicker.C:
@@ -251,70 +222,4 @@ func (s *Shaper) applyPending(ctx context.Context, pending *pendingChanges) erro
 		return s.applyInterfaces(ctxApply, nil)
 	}
 	return s.applyInterfaces(ctxApply, names)
-}
-
-func (s *Shaper) invalidateEthtoolCacheFromLinkUpdate(update netlink.LinkUpdate) {
-	if s == nil {
-		return
-	}
-
-	if attrs := update.Attrs(); attrs != nil && attrs.Name != "" {
-		s.invalidateEthtoolCache(attrs.Name)
-		return
-	}
-
-	if link := update.Link; link != nil {
-		if linkAttrs := link.Attrs(); linkAttrs != nil && linkAttrs.Name != "" {
-			s.invalidateEthtoolCache(linkAttrs.Name)
-			return
-		}
-	}
-
-	s.invalidateEthtoolCacheAll()
-}
-
-func (s *Shaper) invalidateEthtoolCacheFromAddrUpdate(update netlink.AddrUpdate) {
-	if s == nil {
-		return
-	}
-	if update.LinkIndex == 0 {
-		s.invalidateEthtoolCacheAll()
-		return
-	}
-
-	if name, err := getLinkName(s.netlink, update.LinkIndex); err == nil && name != "" {
-		s.invalidateEthtoolCache(name)
-		return
-	}
-
-	s.invalidateEthtoolCacheAll()
-}
-
-// StopWatch stops the watcher loop gracefully by cancelling its context.
-func (s *Shaper) StopWatch() {
-	s.watchMu.Lock()
-	cancel := s.watchCancel
-	s.watchMu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
-}
-
-// WaitWatch blocks until the watcher loop exits or the context times out.
-func (s *Shaper) WaitWatch(ctx context.Context) error {
-	s.watchMu.Lock()
-	done := s.watchDone
-	s.watchMu.Unlock()
-
-	if done == nil {
-		return nil
-	}
-
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }

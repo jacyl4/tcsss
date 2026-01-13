@@ -18,7 +18,6 @@ type NetlinkClient interface {
 	LinkSetMTU(link netlink.Link, mtu int) error
 	LinkSetTxQLen(link netlink.Link, qlen int) error
 	RouteList(link netlink.Link, family int) ([]netlink.Route, error)
-	RouteListFiltered(family int, filter *netlink.Route, filterMask uint64) ([]netlink.Route, error)
 	RouteReplace(route *netlink.Route) error
 	LinkSubscribeWithOptions(ch chan netlink.LinkUpdate, done chan struct{}, opts netlink.LinkSubscribeOptions) error
 	AddrSubscribeWithOptions(ch chan netlink.AddrUpdate, done chan struct{}, opts netlink.AddrSubscribeOptions) error
@@ -57,10 +56,6 @@ func (defaultNetlinkClient) LinkSetTxQLen(link netlink.Link, qlen int) error {
 
 func (defaultNetlinkClient) RouteList(link netlink.Link, family int) ([]netlink.Route, error) {
 	return netlink.RouteList(link, family)
-}
-
-func (defaultNetlinkClient) RouteListFiltered(family int, filter *netlink.Route, filterMask uint64) ([]netlink.Route, error) {
-	return netlink.RouteListFiltered(family, filter, filterMask)
 }
 
 func (defaultNetlinkClient) RouteReplace(route *netlink.Route) error {

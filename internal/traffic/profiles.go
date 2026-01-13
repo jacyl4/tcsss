@@ -20,8 +20,9 @@ type shapingProfile struct {
 }
 
 type profileSet struct {
-	routablePhysical shapingProfile
-	routableVirtual  shapingProfile
+	internalVirtual  shapingProfile
+	externalVirtual  shapingProfile
+	externalPhysical shapingProfile
 	loopback         shapingProfile
 }
 
@@ -43,20 +44,35 @@ var (
 		{"tx-gso-partial", "off"},
 	}
 
+	suppressLinkSettings = []string{
+		"Operation not supported",
+		"cannot modify an unsupported parameter",
+	}
 )
 
 func newProfileSet(cfg ProfileSettings) profileSet {
 	queue := strconv.Itoa(cfg.DefaultQueueLen)
 	loopbackQueue := strconv.Itoa(cfg.LoopbackQueueLen)
+	internalRTT := renderDuration(cfg.InternalRTT)
 	loopbackRTT := renderDuration(cfg.LoopbackRTT)
 	loopbackMTUOverride := strconv.Itoa(cfg.LoopbackMTUOverride)
 
-	routableRootQdisc := []string{
+	internalRootQdisc := []string{
+		"cake", "unlimited", "rtt", internalRTT, "besteffort", "dual-srchost",
+		"nonat", "nowash", "no-split-gso", "ack-filter", "raw", "egress",
+	}
+
+	internalIfbQdisc := []string{
+		"cake", "unlimited", "rtt", internalRTT, "diffserv4", "dual-dsthost",
+		"nonat", "nowash", "no-split-gso", "no-ack-filter", "raw", "ingress",
+	}
+
+	externalRootQdisc := []string{
 		"cake", "unlimited", "besteffort", "dual-srchost", "nonat",
 		"nowash", "no-split-gso", "ack-filter", "ethernet", "egress",
 	}
 
-	routableIfbQdisc := []string{
+	externalIfbQdisc := []string{
 		"cake", "unlimited", "diffserv4", "dual-dsthost", "nonat",
 		"nowash", "no-split-gso", "no-ack-filter", "ethernet", "ingress",
 	}
@@ -72,17 +88,23 @@ func newProfileSet(cfg ProfileSettings) profileSet {
 	}
 
 	return profileSet{
-		routablePhysical: shapingProfile{
+		internalVirtual: shapingProfile{
 			queueLength: queue,
-			rootQdisc:   routableRootQdisc,
-			ifbQdisc:    routableIfbQdisc,
-			offloads:    offloadsWithGro("on"),
-		},
-		routableVirtual: shapingProfile{
-			queueLength: queue,
-			rootQdisc:   routableRootQdisc,
-			ifbQdisc:    routableIfbQdisc,
+			rootQdisc:   internalRootQdisc,
+			ifbQdisc:    internalIfbQdisc,
 			offloads:    offloadsWithGro("off"),
+		},
+		externalVirtual: shapingProfile{
+			queueLength: queue,
+			rootQdisc:   externalRootQdisc,
+			ifbQdisc:    externalIfbQdisc,
+			offloads:    offloadsWithGro("off"),
+		},
+		externalPhysical: shapingProfile{
+			queueLength: queue,
+			rootQdisc:   externalRootQdisc,
+			ifbQdisc:    externalIfbQdisc,
+			offloads:    offloadsWithGro("on"),
 		},
 		loopback: shapingProfile{
 			queueLength: loopbackQueue,

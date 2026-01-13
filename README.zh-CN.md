@@ -13,7 +13,7 @@
 
 - **智能流量整形**：自动对物理、虚拟接口配置 CAKE 队列，对本地回环配置 cubic 队列。
 - **动态配置追踪**：实时监听网络拓扑并复用配置。
-- **系统参数自适应**：根据可用内存档位选择 sysctl 模板。
+- **系统参数自适应**：根据可用内存档位选择 sysctl/rlimit 模板。
 - **路由优化**：调整 TCP 拥塞窗口、拥塞控制与路由条目。
 - **结构化日志**：输出 JSON 便于集中化监控。
 
@@ -162,6 +162,7 @@ tcsss/
 │   │   └── memory.go                   # 系统内存信息读取
 │   ├── syslimit/
 │   │   ├── limits.go                   # /etc/security/limits 生成器
+│   │   ├── rlimit.go                   # 进程 rlimit 应用器
 │   │   └── sysctlconf.go               # sysctl.conf 渲染器
 │   └── traffic/
 │       ├── classifier.go               # 接口分类入口
@@ -210,6 +211,7 @@ NewDaemon()
 daemon.Run(ctx)
   ├─ SysctlApplier.Apply()    ── 写入 /etc/sysctl.conf
   ├─ LimitsApplier.Apply()    ── 写入 limits.conf 与 system.conf
+  ├─ RlimitApplier.Apply()    ── setrlimit() 当前进程
   └─ TrafficManager.Apply()
          ├─ RouteOptimizer.OptimizeRoutes()
          └─ applyInterfaces()
@@ -218,7 +220,7 @@ daemon.Run(ctx)
 
 ### 流量整形策略
 
-- 接口分类：只处理路由表中的接口（loopback、可路由物理/虚拟），跳过 ifb/docker/veth/br/virbr 前缀；仅在 ethtool 配置上区分物理/虚拟（GRO 开/关）。
+- 接口分类：loopback / 外部物理 / 外部虚拟 / 内部虚拟跳过，基于名称前缀、sysfs、驱动与供应商信息。
 - CAKE 配置：针对不同接口设置 MTU、RTT、Diffserv、ACK 过滤等预设。
 - Ingress 整形：通过 IFB 镜像设备实现。
 
@@ -239,8 +241,9 @@ daemon.Run(ctx)
 
 ### 资源限制
 
-- 进程级限制由 systemd 单元文件提供（`LimitNOFILE`、`LimitNPROC` 等）。
-- 模板以 sysctl 调优为主；如提供 limits 模板，可生成 `/etc/security/limits.conf` 与 `/etc/systemd/system.conf`。
+- rlimit：`nofile`、`nproc`、`memlock` 等随内存档位自动设定。
+- PAM/systemd：生成 `/etc/security/limits.conf` 与 `/etc/systemd/system.conf` 默认限制。
+- setrlimit：守护进程启动后立即应用，确保运行时资源充足。
 
 ### 路由优化
 

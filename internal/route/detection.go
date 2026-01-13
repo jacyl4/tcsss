@@ -23,7 +23,7 @@ func (opt *Optimizer) getPrimaryNIC() (string, error) {
 
 func (opt *Optimizer) getPrimaryNICFromCommand() (string, error) {
 	ctx := context.Background()
-	lines, err := opt.fetchRouteLinesFromCommand(ctx, "route", "show")
+	lines, err := opt.fetchRoutes(ctx, "route", "show")
 	if err != nil {
 		return "", err
 	}
@@ -111,6 +111,44 @@ func (opt *Optimizer) getCurrentCongestionControl() (string, error) {
 	}
 
 	return "", fmt.Errorf("empty congestion control value")
+}
+
+func shouldOptimizeLocal(line string) bool {
+	if line == "" || !strings.HasPrefix(line, "local ") {
+		return false
+	}
+	if strings.Contains(line, "broadcast") {
+		return false
+	}
+	if strings.Contains(line, "linkdown") {
+		return false
+	}
+	if device, ok := extractDevice(line); ok && device == "lo" {
+		return false
+	}
+	return true
+}
+
+func shouldOptimizeLoopback(line string) bool {
+	if line == "" || !strings.HasPrefix(line, "local ") {
+		return false
+	}
+	device, ok := extractDevice(line)
+	if !ok {
+		return false
+	}
+	return device == "lo"
+}
+
+func shouldOptimizeNIC(line, nic string) bool {
+	if line == "" || strings.Contains(line, "linkdown") || strings.Contains(line, "congctl") {
+		return false
+	}
+	device, ok := extractDevice(line)
+	if !ok {
+		return false
+	}
+	return device == nic
 }
 
 func extractDevice(output string) (string, bool) {

@@ -24,10 +24,9 @@ type ProfileSettings struct {
 
 // Settings encapsulates the inputs required to build a Shaper.
 type Settings struct {
-	Routes          route.WindowConfig
-	Watcher         WatcherSettings
-	Profiles        ProfileSettings
-	EthtoolCacheTTL time.Duration
+	Routes   route.WindowConfig
+	Watcher  WatcherSettings
+	Profiles ProfileSettings
 }
 
 const (
@@ -39,7 +38,6 @@ const (
 	defaultLoopbackMTU     = 65520
 	defaultInternalRTT     = 100 * time.Microsecond
 	defaultLoopbackRTT     = 20 * time.Microsecond
-	defaultEthtoolCacheTTL = 30 * time.Second
 )
 
 func (s Settings) withDefaults() Settings {
@@ -68,9 +66,6 @@ func (s Settings) withDefaults() Settings {
 	}
 	if s.Profiles.LoopbackRTT <= 0 {
 		s.Profiles.LoopbackRTT = defaultLoopbackRTT
-	}
-	if s.EthtoolCacheTTL <= 0 {
-		s.EthtoolCacheTTL = defaultEthtoolCacheTTL
 	}
 	return s
 }

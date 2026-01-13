@@ -129,12 +129,12 @@ func (s *Shaper) cleanupSkippedVirtualInterfaces(ctx context.Context, links []ne
 		name := attrs.Name
 
 		// Skip ifb interfaces (handled separately) and loopback
-		if name == "" || strings.HasPrefix(name, "ifb") || attrs.Flags&net.FlagLoopback != 0 {
+		if strings.HasPrefix(name, "ifb") || attrs.Flags&net.FlagLoopback != 0 {
 			continue
 		}
 
-		// Only clean up interfaces that match skip prefixes
-		if !hasSkipPrefix(name) {
+		// Only clean up interfaces that match virtual name prefixes (should be skipped)
+		if !hasInternalVirtualPrefix(name) {
 			continue
 		}
 
@@ -154,7 +154,7 @@ func (s *Shaper) cleanupSkippedVirtualInterfaces(ctx context.Context, links []ne
 		}
 
 		if s.logger != nil {
-			s.logger.Debug("cleaned up qdisc from skipped interface", slog.String("interface", name))
+			s.logger.Debug("cleaned up qdisc from skipped virtual interface", slog.String("interface", name))
 		}
 	}
 
