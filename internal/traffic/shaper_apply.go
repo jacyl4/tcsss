@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -85,9 +86,6 @@ func (s *Shaper) applyToLinks(ctx context.Context, links []netlink.Link, only ma
 	errCh := make(chan error, len(links))
 	statsCh := make(chan workerStats, workerCount)
 
-	defer close(errCh)
-	defer close(statsCh)
-
 	var wg sync.WaitGroup
 	s.startLinkWorkers(ctx, workerCount, &wg, workCh, errCh, statsCh, only)
 
@@ -97,6 +95,8 @@ func (s *Shaper) applyToLinks(ctx context.Context, links []netlink.Link, only ma
 	close(workCh)
 
 	wg.Wait()
+	close(errCh)
+	close(statsCh)
 
 	return s.summarizeLinkResults(errCh, statsCh)
 }
@@ -118,9 +118,7 @@ func (s *Shaper) configureProfile(ctx context.Context, attrs *netlink.LinkAttrs,
 		return err
 	}
 
-	s.appliedMu.Lock()
-	s.appliedSignatures[profileCtx.iface] = profileCtx.signature
-	s.appliedMu.Unlock()
+	s.recordSignature(profileCtx.iface, profileCtx.signature)
 	return nil
 }
 
@@ -325,10 +323,27 @@ func (s *Shaper) summarizeLinkResults(errCh <-chan error, statsCh <-chan workerS
 }
 
 func (s *Shaper) workerCount(total int) int {
-	if total < defaultWorkerCount {
+	switch {
+	case total <= 4:
 		return total
+	case total <= 16:
+		return 4
+	case total <= 64:
+		return 8
+	default:
+		wc := minInt(16, runtime.NumCPU())
+		if wc < 1 {
+			wc = 1
+		}
+		return wc
 	}
-	return defaultWorkerCount
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func (s *Shaper) shouldProcessLink(attrs *netlink.LinkAttrs, only map[string]struct{}) (string, bool) {

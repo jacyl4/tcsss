@@ -12,6 +12,7 @@ import (
 	"github.com/vishvananda/netlink"
 
 	terr "tcsss/internal/errors"
+	"tcsss/internal/retry"
 )
 
 // Watch listens to netlink events and reapplies traffic shaping when needed.
@@ -30,7 +31,7 @@ func (s *Shaper) Watch(ctx context.Context) (err error) {
 		}
 	}()
 
-	subs, err := s.setupNetlinkSubscriptions()
+	subs, err := s.setupNetlinkSubscriptions(ctx)
 	if err != nil {
 		return err
 	}
@@ -54,7 +55,7 @@ func (s *netlinkSubscriptions) Close() {
 	})
 }
 
-func (s *Shaper) setupNetlinkSubscriptions() (*netlinkSubscriptions, error) {
+func (s *Shaper) setupNetlinkSubscriptions(ctx context.Context) (*netlinkSubscriptions, error) {
 	subs := &netlinkSubscriptions{
 		links:    make(chan netlink.LinkUpdate, 32),
 		addrs:    make(chan netlink.AddrUpdate, 32),
@@ -62,16 +63,26 @@ func (s *Shaper) setupNetlinkSubscriptions() (*netlinkSubscriptions, error) {
 		addrDone: make(chan struct{}),
 	}
 
-	if err := s.netlink.LinkSubscribeWithOptions(subs.links, subs.linkDone, netlink.LinkSubscribeOptions{ListExisting: false}); err != nil {
+	if err := retry.Do(ctx, retry.Config{MaxAttempts: 5, InitialDelay: 200 * time.Millisecond, MaxDelay: 2 * time.Second}, func() error {
+		return s.netlink.LinkSubscribeWithOptions(subs.links, subs.linkDone, netlink.LinkSubscribeOptions{ListExisting: false})
+	}); err != nil {
 		subs.Close()
+		if errors.Is(err, context.Canceled) {
+			return nil, err
+		}
 		return nil, terr.New(
 			terr.CategoryCritical,
 			fmt.Errorf("subscribe link: %w", err),
 			terr.ErrorContext{Operation: "netlink_link_subscribe"},
 		)
 	}
-	if err := s.netlink.AddrSubscribeWithOptions(subs.addrs, subs.addrDone, netlink.AddrSubscribeOptions{ListExisting: false}); err != nil {
+	if err := retry.Do(ctx, retry.Config{MaxAttempts: 5, InitialDelay: 200 * time.Millisecond, MaxDelay: 2 * time.Second}, func() error {
+		return s.netlink.AddrSubscribeWithOptions(subs.addrs, subs.addrDone, netlink.AddrSubscribeOptions{ListExisting: false})
+	}); err != nil {
 		subs.Close()
+		if errors.Is(err, context.Canceled) {
+			return nil, err
+		}
 		return nil, terr.New(
 			terr.CategoryCritical,
 			fmt.Errorf("subscribe addr: %w", err),

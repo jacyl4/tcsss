@@ -7,4 +7,6 @@ const (
 	IngressHandle = "ffff:"
 	// defaultWorkerCount limits concurrent interface configuration to a small, safe pool.
 	defaultWorkerCount = 4
+	// maxSignatureEntries bounds the applied signature cache to avoid unbounded growth on interface churn.
+	maxSignatureEntries = 256
 )

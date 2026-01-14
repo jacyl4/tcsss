@@ -8,10 +8,12 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/vishvananda/netlink"
 
 	terr "tcsss/internal/errors"
+	"tcsss/internal/retry"
 )
 
 func (s *Shaper) ensureIfb(ctx context.Context, name, mtu, qlen string) error {
@@ -19,18 +21,33 @@ func (s *Shaper) ensureIfb(ctx context.Context, name, mtu, qlen string) error {
 	if err != nil {
 		var notFound netlink.LinkNotFoundError
 		if errors.As(err, &notFound) {
-			if runErr := s.run(ctx, "ip", "link", "add", "name", name, "type", "ifb"); runErr != nil {
+			createErr := retry.Do(ctx, retry.Config{MaxAttempts: 3, InitialDelay: 100 * time.Millisecond, MaxDelay: 500 * time.Millisecond}, func() error {
+				out, runErr := s.runGetOutput(ctx, "ip", "link", "add", "name", name, "type", "ifb")
+				if runErr == nil {
+					return nil
+				}
+				msg := strings.ToLower(out + " " + runErr.Error())
+				if strings.Contains(msg, "file exists") {
+					return nil
+				}
+				return runErr
+			})
+			if createErr != nil {
 				return terr.New(
 					terr.CategoryRecoverable,
-					fmt.Errorf("create ifb %s: %w", name, runErr),
+					fmt.Errorf("create ifb %s: %w", name, createErr),
 					terr.ErrorContext{IFB: name, Command: "ip link add"},
 				)
 			}
-			link, err = s.netlink.LinkByName(name)
-			if err != nil {
+			reLookupErr := retry.Do(ctx, retry.Config{MaxAttempts: 3, InitialDelay: 50 * time.Millisecond, MaxDelay: 300 * time.Millisecond}, func() error {
+				var lookupErr error
+				link, lookupErr = s.netlink.LinkByName(name)
+				return lookupErr
+			})
+			if reLookupErr != nil {
 				return terr.New(
 					terr.CategoryRecoverable,
-					fmt.Errorf("lookup ifb %s after create: %w", name, err),
+					fmt.Errorf("lookup ifb %s after create: %w", name, reLookupErr),
 					terr.ErrorContext{IFB: name, Operation: "link_lookup_post_create"},
 				)
 			}

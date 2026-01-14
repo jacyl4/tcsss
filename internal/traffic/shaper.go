@@ -67,3 +67,38 @@ func (s *Shaper) Apply(ctx context.Context) error {
 
 	return s.applyInterfaces(ctx, nil)
 }
+
+func (s *Shaper) recordSignature(iface, signature string) {
+	if iface == "" {
+		return
+	}
+
+	s.appliedMu.Lock()
+	defer s.appliedMu.Unlock()
+
+	if s.appliedSignatures == nil {
+		s.appliedSignatures = make(map[string]string)
+	}
+
+	s.appliedSignatures[iface] = signature
+	if len(s.appliedSignatures) <= maxSignatureEntries {
+		return
+	}
+
+	evictCount := maxSignatureEntries / 10
+	if evictCount < 1 {
+		evictCount = 1
+	}
+
+	deleted := 0
+	for k := range s.appliedSignatures {
+		if k == iface {
+			continue
+		}
+		delete(s.appliedSignatures, k)
+		deleted++
+		if deleted >= evictCount {
+			break
+		}
+	}
+}
