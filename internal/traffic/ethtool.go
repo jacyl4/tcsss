@@ -2,9 +2,8 @@ package traffic
 
 import (
 	"context"
+	"log/slog"
 	"strings"
-
-	terr "tcsss/internal/errors"
 )
 
 var suppressOffloads = []string{
@@ -13,7 +12,7 @@ var suppressOffloads = []string{
 	"cannot modify an unsupported parameter",
 }
 
-// ensureOffloads minimizes ethtool calls by only changing mismatched settings, batching into a single -K call
+// ensureOffloads minimizes ethtool calls by only changing mismatched settings, batching into a single -K call.
 func (s *Shaper) ensureOffloads(ctx context.Context, iface string, settings []offloadSetting) {
 	if len(settings) == 0 {
 		return
@@ -26,13 +25,10 @@ func (s *Shaper) ensureOffloads(ctx context.Context, iface string, settings []of
 			feat := normalizeSetFeatureName(setting.feature)
 			args := []string{"-K", iface, feat, setting.state}
 			if err := s.runOptional(ctx, "ethtool", args, suppressOffloads); err != nil {
-				s.logOptional("ethtool feature apply skipped", iface, err, terr.ErrorContext{
-					Command: "ethtool -K",
-					Extra: map[string]any{
-						"feature": feat,
-						"state":   setting.state,
-					},
-				})
+				s.logOptional("ethtool feature apply skipped", iface, err,
+					slog.String("command", "ethtool -K"),
+					slog.String("feature", feat),
+					slog.String("state", setting.state))
 			}
 		}
 		return
@@ -60,16 +56,13 @@ func (s *Shaper) ensureOffloads(ctx context.Context, iface string, settings []of
 
 	args := append([]string{"-K", iface}, batched...)
 	if err := s.runOptional(ctx, "ethtool", args, suppressOffloads); err != nil {
-		s.logOptional("batched ethtool features skipped", iface, err, terr.ErrorContext{
-			Command: "ethtool -K",
-			Extra: map[string]any{
-				"features": batched,
-			},
-		})
+		s.logOptional("batched ethtool features skipped", iface, err,
+			slog.String("command", "ethtool -K"),
+			slog.Any("features", batched))
 	}
 }
 
-// readEthtoolFeatures runs 'ethtool -k' and parses feature states and fixed flags
+// readEthtoolFeatures runs 'ethtool -k' and parses feature states and fixed flags.
 func (s *Shaper) readEthtoolFeatures(ctx context.Context, iface string) (map[string]string, map[string]bool) {
 	out, err := s.runGetOutput(ctx, "ethtool", "-k", iface)
 	if err != nil || out == "" {
@@ -107,7 +100,7 @@ func (s *Shaper) readEthtoolFeatures(ctx context.Context, iface string) (map[str
 	return features, fixed
 }
 
-// normalizeSetFeatureName maps various aliases to the canonical ethtool -K feature name
+// normalizeSetFeatureName maps various aliases to the canonical ethtool -K feature name.
 func normalizeSetFeatureName(name string) string {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "rx-checksum", "rx_checksum":
@@ -119,7 +112,7 @@ func normalizeSetFeatureName(name string) string {
 	}
 }
 
-// mapDesiredToReadKey maps desired feature names to ethtool -k output keys
+// mapDesiredToReadKey maps desired feature names to ethtool -k output keys.
 func mapDesiredToReadKey(name string) string {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "rx", "rx-checksum", "rx_checksum":

@@ -43,11 +43,6 @@ var (
 		{"tx-scatter-gather", "off"},
 		{"tx-gso-partial", "off"},
 	}
-
-	suppressLinkSettings = []string{
-		"Operation not supported",
-		"cannot modify an unsupported parameter",
-	}
 )
 
 func newProfileSet(cfg ProfileSettings) profileSet {

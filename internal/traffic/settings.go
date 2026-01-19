@@ -3,6 +3,7 @@ package traffic
 import (
 	"time"
 
+	"tcsss/internal/config"
 	route "tcsss/internal/route"
 )
 
@@ -29,43 +30,32 @@ type Settings struct {
 	Profiles ProfileSettings
 }
 
-const (
-	defaultApplyTimeout    = 45 * time.Second
-	defaultReapplyInterval = 2 * time.Second
-	defaultCleanupInterval = 5 * time.Minute
-	defaultQueueLen        = 10001
-	defaultLoopbackQueue   = 10000
-	defaultLoopbackMTU     = 65520
-	defaultInternalRTT     = 100 * time.Microsecond
-	defaultLoopbackRTT     = 20 * time.Microsecond
-)
-
 func (s Settings) withDefaults() Settings {
 	s.Routes = s.Routes.WithDefaults()
 	if s.Watcher.ReapplyInterval <= 0 {
-		s.Watcher.ReapplyInterval = defaultReapplyInterval
+		s.Watcher.ReapplyInterval = config.DefaultWatcherReapplyInterval
 	}
 	if s.Watcher.CleanupInterval <= 0 {
-		s.Watcher.CleanupInterval = defaultCleanupInterval
+		s.Watcher.CleanupInterval = config.DefaultWatcherCleanupInterval
 	}
 	if s.Watcher.ApplyTimeout <= 0 {
-		s.Watcher.ApplyTimeout = defaultApplyTimeout
+		s.Watcher.ApplyTimeout = config.DefaultWatcherApplyTimeout
 	}
 
 	if s.Profiles.DefaultQueueLen <= 0 {
-		s.Profiles.DefaultQueueLen = defaultQueueLen
+		s.Profiles.DefaultQueueLen = config.DefaultTxQueueLen
 	}
 	if s.Profiles.LoopbackQueueLen <= 0 {
-		s.Profiles.LoopbackQueueLen = defaultLoopbackQueue
+		s.Profiles.LoopbackQueueLen = config.DefaultLoopbackTxQueueLen
 	}
 	if s.Profiles.LoopbackMTUOverride <= 0 {
-		s.Profiles.LoopbackMTUOverride = defaultLoopbackMTU
+		s.Profiles.LoopbackMTUOverride = config.DefaultLoopbackMSS
 	}
 	if s.Profiles.InternalRTT <= 0 {
-		s.Profiles.InternalRTT = defaultInternalRTT
+		s.Profiles.InternalRTT = config.DefaultInternalRTT
 	}
 	if s.Profiles.LoopbackRTT <= 0 {
-		s.Profiles.LoopbackRTT = defaultLoopbackRTT
+		s.Profiles.LoopbackRTT = config.DefaultLoopbackRTT
 	}
 	return s
 }

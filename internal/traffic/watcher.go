@@ -9,9 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"tcsss/internal/config"
+	"tcsss/internal/infra"
+
 	"github.com/vishvananda/netlink"
 
-	terr "tcsss/internal/errors"
 	"tcsss/internal/retry"
 )
 
@@ -57,8 +59,8 @@ func (s *netlinkSubscriptions) Close() {
 
 func (s *Shaper) setupNetlinkSubscriptions(ctx context.Context) (*netlinkSubscriptions, error) {
 	subs := &netlinkSubscriptions{
-		links:    make(chan netlink.LinkUpdate, 32),
-		addrs:    make(chan netlink.AddrUpdate, 32),
+		links:    make(chan netlink.LinkUpdate, config.DefaultChannelBuffer),
+		addrs:    make(chan netlink.AddrUpdate, config.DefaultChannelBuffer),
 		linkDone: make(chan struct{}),
 		addrDone: make(chan struct{}),
 	}
@@ -70,11 +72,7 @@ func (s *Shaper) setupNetlinkSubscriptions(ctx context.Context) (*netlinkSubscri
 		if errors.Is(err, context.Canceled) {
 			return nil, err
 		}
-		return nil, terr.New(
-			terr.CategoryCritical,
-			fmt.Errorf("subscribe link: %w", err),
-			terr.ErrorContext{Operation: "netlink_link_subscribe"},
-		)
+		return nil, fmt.Errorf("subscribe link: %w", err)
 	}
 	if err := retry.Do(ctx, retry.Config{MaxAttempts: 5, InitialDelay: 200 * time.Millisecond, MaxDelay: 2 * time.Second}, func() error {
 		return s.netlink.AddrSubscribeWithOptions(subs.addrs, subs.addrDone, netlink.AddrSubscribeOptions{ListExisting: false})
@@ -83,11 +81,7 @@ func (s *Shaper) setupNetlinkSubscriptions(ctx context.Context) (*netlinkSubscri
 		if errors.Is(err, context.Canceled) {
 			return nil, err
 		}
-		return nil, terr.New(
-			terr.CategoryCritical,
-			fmt.Errorf("subscribe addr: %w", err),
-			terr.ErrorContext{Operation: "netlink_addr_subscribe"},
-		)
+		return nil, fmt.Errorf("subscribe addr: %w", err)
 	}
 
 	return subs, nil
@@ -117,11 +111,11 @@ func (s *Shaper) watchLoop(ctx context.Context, subs *netlinkSubscriptions) erro
 			pending.AddAddr(update)
 		case <-applyTicker.C:
 			if err := s.applyPending(ctx, pending); err != nil && !errors.Is(err, context.Canceled) {
-				s.handleCategorizedError("reapply failed", "", err, terr.CategoryRecoverable)
+				s.logError("reapply failed", "", err)
 			}
 		case <-cleanupTicker.C:
 			if err := s.cleanupStaleSignatures(); err != nil {
-				s.handleCategorizedError("cleanup stale signatures failed", "", err, terr.CategoryRecoverable)
+				s.logError("cleanup stale signatures failed", "", err)
 			}
 		}
 	}
@@ -131,10 +125,10 @@ type pendingChanges struct {
 	mu      sync.Mutex
 	all     bool
 	names   map[string]struct{}
-	netlink NetlinkClient
+	netlink infra.NetlinkClient
 }
 
-func newPendingChanges(netlinkClient NetlinkClient) *pendingChanges {
+func newPendingChanges(netlinkClient infra.NetlinkClient) *pendingChanges {
 	return &pendingChanges{
 		names:   map[string]struct{}{},
 		netlink: netlinkClient,
@@ -169,12 +163,12 @@ func (p *pendingChanges) AddAddr(update netlink.AddrUpdate) {
 		return
 	}
 	if p.netlink != nil {
-		if attrs, err := safeGetLinkAttrs(p.netlink, update.LinkIndex); err == nil && attrs.Name != "" {
+		if attrs, err := infra.SafeGetLinkAttrs(p.netlink, update.LinkIndex); err == nil && attrs.Name != "" {
 			p.addNameLocked(attrs.Name)
 			return
 		}
 	} else {
-		if attrs, err := safeGetLinkAttrs(defaultNetlinkClient{}, update.LinkIndex); err == nil && attrs.Name != "" {
+		if attrs, err := infra.SafeGetLinkAttrs(infra.DefaultNetlinkClient{}, update.LinkIndex); err == nil && attrs.Name != "" {
 			p.addNameLocked(attrs.Name)
 			return
 		}
@@ -224,13 +218,17 @@ func (s *Shaper) applyPending(ctx context.Context, pending *pendingChanges) erro
 	if !applyAll && len(names) == 0 {
 		return nil
 	}
-	pending.clear()
 
 	ctxApply, cancel := context.WithTimeout(ctx, s.applyTimeout)
 	defer cancel()
 
+	targets := names
 	if applyAll {
-		return s.applyInterfaces(ctxApply, nil)
+		targets = nil
 	}
-	return s.applyInterfaces(ctxApply, names)
+	if err := s.applyInterfaces(ctxApply, targets); err != nil {
+		return err
+	}
+	pending.clear()
+	return nil
 }

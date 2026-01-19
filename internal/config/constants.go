@@ -17,10 +17,17 @@ const (
 	MinQueueLen = 1
 	MaxQueueLen = 1_000_000
 
-	// DefaultCommandTimeouts provide consistent durations for external command execution.
-	DefaultCommandTimeout   = 5 * time.Second
-	DefaultIPCommandTimeout = 2 * time.Second
-	DefaultTCCommandTimeout = 3 * time.Second
+	// Default network configuration values.
+	DefaultLoopbackMSS        = 65520
+	DefaultTxQueueLen         = 10001
+	DefaultLoopbackTxQueueLen = 10000
+	DefaultInternalRTT        = 100 * time.Microsecond
+	DefaultLoopbackRTT        = 20 * time.Microsecond
+
+	// Default route tuning values.
+	DefaultInitCwndBytes       = 146000
+	DefaultInitRwndBytes       = 146000
+	DefaultLoopbackWindowBytes = 16 * 1024 * 1024 // 16 MiB
 
 	// Default watcher intervals reused across the daemon.
 	DefaultWatcherReapplyInterval = 2 * time.Second

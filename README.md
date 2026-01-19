@@ -131,26 +131,23 @@ tcsss/
 ├── cmd/                               # CLI entry-point directory
 │   └── tcsss/
 │       └── main.go                     # Application entry and bootstrap logic
-├── internal/                          # Internal business logic modules
+├── internal/                          # Internal business logic modules (~3400 lines)
 │   ├── app/
 │   │   └── daemon.go                   # Daemon lifecycle orchestration
 │   ├── config/
-│   │   ├── constants.go                # Configuration module constants
-│   │   ├── selector.go                 # Template scanning and selection
-│   │   └── types.go                    # Configuration data structures
+│   │   ├── constants.go                # Shared constants and default values
+│   │   └── selector.go                 # Template scanning and memory tier selection
 │   ├── detector/
-│   │   ├── memory.go                   # Memory capacity detection
 │   │   ├── modules.go                  # Kernel module availability checks
-│   │   └── runtime.go                  # Runtime capability evaluation
-│   ├── errors/
-│   │   ├── context.go                  # Error context helpers
-│   │   ├── errors.go                   # Shared error type definitions
-│   │   ├── logging.go                  # Error logging utilities
-│   │   └── multierror.go               # Aggregated error handling
+│   │   └── runtime.go                  # Runtime prerequisite validation
+│   ├── infra/
+│   │   └── deps.go                     # Shared abstractions (NetlinkClient, CommandExecutor)
+│   ├── retry/
+│   │   └── retry.go                    # Generic retry with exponential backoff
 │   ├── route/
 │   │   ├── config.go                   # Route-optimization configuration
 │   │   ├── deps.go                     # Route module dependency wiring
-│   │   ├── detection.go                # Route environment detection
+│   │   ├── detection.go                # NIC and congestion control detection
 │   │   └── optimizer.go                # Routing table optimization logic
 │   ├── sysinfo/
 │   │   └── memory.go                   # System memory information reader
@@ -159,25 +156,14 @@ tcsss/
 │   │   ├── rlimit.go                   # Process rlimit applier
 │   │   └── sysctlconf.go               # sysctl.conf renderer
 │   └── traffic/
-│       ├── classifier.go               # Interface classification entry point
-│       ├── classifier_cache.go         # Classification cache layer
-│       ├── classifier_detect.go        # Interface attribute detection
-│       ├── classifier_patterns.go      # Classification patterns and rules
-│       ├── constants.go                # Traffic module constants
-│       ├── deps.go                     # Traffic module dependency wiring
-│       ├── ethtool_manager.go          # NIC offload manager
-│       ├── ifb_manager.go              # IFB mirror device manager
-│       ├── netlink_watcher.go          # Netlink event watcher
+│       ├── classifier.go               # Interface classification with caching
+│       ├── ethtool.go                  # NIC offload manager (batched operations)
+│       ├── ifb.go                      # IFB mirror device manager
 │       ├── profiles.go                 # CAKE preset definitions
 │       ├── settings.go                 # Traffic shaping configuration
-│       ├── shaper.go                   # Shaping workflow coordinator
-│       ├── shaper_apply.go             # Shaping apply logic
-│       ├── shaper_cleanup.go           # Shaping cleanup routines
-│       ├── shaper_errors.go            # Shaping error taxonomy
-│       ├── shaper_steps.go             # Shaping step definitions
-│       ├── signature.go                # Interface signature helpers
-│       ├── tc_config.go                # tc configuration template builder
-│       └── tc_executor.go              # tc command executor wrapper
+│       ├── shaper.go                   # Shaping workflow coordinator (worker pool)
+│       ├── tc.go                       # tc command builder and executor
+│       └── watcher.go                  # Netlink event watcher
 ├── systemd/                            # systemd unit directory
 │   └── tcsss.service                   # Service unit file
 ├── templates/                          # Sample configuration templates

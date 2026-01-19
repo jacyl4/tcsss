@@ -10,18 +10,8 @@ import (
 	"sync"
 )
 
-// SysctlService defines system limit reconciliation behavior.
-type SysctlService interface {
-	Apply(ctx context.Context) error
-}
-
-// RlimitService defines process resource limit reconciliation behavior.
-type RlimitService interface {
-	Apply(ctx context.Context) error
-}
-
-// LimitsService defines system-wide resource limit reconciliation behavior.
-type LimitsService interface {
+// Applier defines single-shot reconciliation behavior.
+type Applier interface {
 	Apply(ctx context.Context) error
 }
 
@@ -33,18 +23,18 @@ type TrafficService interface {
 
 // Dependencies groups the external services required by the daemon.
 type Dependencies struct {
-	SysctlApplier  SysctlService
-	RlimitApplier  RlimitService
-	LimitsApplier  LimitsService
+	SysctlApplier  Applier
+	RlimitApplier  Applier
+	LimitsApplier  Applier
 	TrafficManager TrafficService
 	Logger         *slog.Logger
 }
 
 // Daemon coordinates subsystems and event loops.
 type Daemon struct {
-	sysctlApplier  SysctlService
-	rlimitApplier  RlimitService
-	limitsApplier  LimitsService
+	sysctlApplier  Applier
+	rlimitApplier  Applier
+	limitsApplier  Applier
 	trafficManager TrafficService
 	logger         *slog.Logger
 }

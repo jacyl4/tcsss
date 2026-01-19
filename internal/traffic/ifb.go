@@ -12,7 +12,6 @@ import (
 
 	"github.com/vishvananda/netlink"
 
-	terr "tcsss/internal/errors"
 	"tcsss/internal/retry"
 )
 
@@ -33,11 +32,7 @@ func (s *Shaper) ensureIfb(ctx context.Context, name, mtu, qlen string) error {
 				return runErr
 			})
 			if createErr != nil {
-				return terr.New(
-					terr.CategoryRecoverable,
-					fmt.Errorf("create ifb %s: %w", name, createErr),
-					terr.ErrorContext{IFB: name, Command: "ip link add"},
-				)
+				return fmt.Errorf("create ifb %s: %w", name, createErr)
 			}
 			reLookupErr := retry.Do(ctx, retry.Config{MaxAttempts: 3, InitialDelay: 50 * time.Millisecond, MaxDelay: 300 * time.Millisecond}, func() error {
 				var lookupErr error
@@ -45,54 +40,30 @@ func (s *Shaper) ensureIfb(ctx context.Context, name, mtu, qlen string) error {
 				return lookupErr
 			})
 			if reLookupErr != nil {
-				return terr.New(
-					terr.CategoryRecoverable,
-					fmt.Errorf("lookup ifb %s after create: %w", name, reLookupErr),
-					terr.ErrorContext{IFB: name, Operation: "link_lookup_post_create"},
-				)
+				return fmt.Errorf("lookup ifb %s after create: %w", name, reLookupErr)
 			}
 		} else {
-			return terr.New(
-				terr.CategoryRecoverable,
-				fmt.Errorf("lookup ifb %s: %w", name, err),
-				terr.ErrorContext{IFB: name, Operation: "link_lookup"},
-			)
+			return fmt.Errorf("lookup ifb %s: %w", name, err)
 		}
 	}
 
 	attrs := link.Attrs()
 	if attrs == nil {
-		return terr.New(
-			terr.CategoryRecoverable,
-			fmt.Errorf("link attrs missing for %s", name),
-			terr.ErrorContext{IFB: name},
-		)
+		return fmt.Errorf("link attrs missing for %s", name)
 	}
 
 	desiredMTU, err := strconv.Atoi(mtu)
 	if err != nil {
-		return terr.New(
-			terr.CategoryRecoverable,
-			fmt.Errorf("parse mtu %q for %s: %w", mtu, name, err),
-			terr.ErrorContext{IFB: name, Value: mtu},
-		)
+		return fmt.Errorf("parse mtu %q for %s: %w", mtu, name, err)
 	}
 	desiredQueueLen, err := strconv.Atoi(qlen)
 	if err != nil {
-		return terr.New(
-			terr.CategoryRecoverable,
-			fmt.Errorf("parse qlen %q for %s: %w", qlen, name, err),
-			terr.ErrorContext{IFB: name, Value: qlen},
-		)
+		return fmt.Errorf("parse qlen %q for %s: %w", qlen, name, err)
 	}
 
 	if attrs.MTU != desiredMTU || attrs.TxQLen != desiredQueueLen {
 		if err := s.run(ctx, "ip", "link", "set", name, "qlen", qlen, "mtu", mtu); err != nil {
-			return terr.New(
-				terr.CategoryRecoverable,
-				fmt.Errorf("update ifb %s parameters: %w", name, err),
-				terr.ErrorContext{IFB: name, Command: "ip link set"},
-			)
+			return fmt.Errorf("update ifb %s parameters: %w", name, err)
 		}
 		if refreshed, refreshErr := s.netlink.LinkByName(name); refreshErr == nil && refreshed.Attrs() != nil {
 			attrs = refreshed.Attrs()
@@ -101,11 +72,7 @@ func (s *Shaper) ensureIfb(ctx context.Context, name, mtu, qlen string) error {
 
 	if attrs.Flags&net.FlagUp == 0 {
 		if err := s.run(ctx, "ip", "link", "set", name, "up"); err != nil {
-			return terr.New(
-				terr.CategoryRecoverable,
-				fmt.Errorf("set ifb %s up: %w", name, err),
-				terr.ErrorContext{IFB: name, Command: "ip link set up"},
-			)
+			return fmt.Errorf("set ifb %s up: %w", name, err)
 		}
 	}
 
@@ -127,7 +94,7 @@ func (s *Shaper) pruneStaleIfbs(ctx context.Context, links []netlink.Link, requi
 			if err := s.netlink.LinkDel(link); err != nil {
 				// Try using ip command as fallback and continue
 				if runErr := s.runQuiet(ctx, "ip", "link", "del", name); runErr != nil {
-					s.logOptional("fallback ifb delete failed", name, runErr, terr.ErrorContext{IFB: name, Command: "ip link del"})
+					s.logOptional("fallback ifb delete failed", name, runErr, slog.String("command", "ip link del"))
 				}
 			} else if s.logger != nil {
 				s.logger.Debug("pruned stale ifb", slog.String("interface", name))
@@ -157,17 +124,17 @@ func (s *Shaper) cleanupSkippedVirtualInterfaces(ctx context.Context, links []ne
 
 		// Remove root qdisc (ignore errors, interface might not have one)
 		if err := s.runQuiet(ctx, "tc", "qdisc", "del", "dev", name, "root"); err != nil {
-			s.logOptional("skip virtual qdisc root cleanup", name, err, terr.ErrorContext{Command: "tc qdisc del root"})
+			s.logOptional("skip virtual qdisc root cleanup", name, err, slog.String("command", "tc qdisc del root"))
 		}
 		// Remove ingress qdisc (ignore errors)
 		if err := s.runQuiet(ctx, "tc", "qdisc", "del", "dev", name, "handle", IngressHandle, "ingress"); err != nil {
-			s.logOptional("skip virtual ingress qdisc cleanup", name, err, terr.ErrorContext{Command: "tc qdisc del ingress"})
+			s.logOptional("skip virtual ingress qdisc cleanup", name, err, slog.String("command", "tc qdisc del ingress"))
 		}
 
 		// Try to remove any associated ifb interface for this interface
 		ifbName := truncateIfb(IfbPrefix + name)
 		if err := s.runQuiet(ctx, "ip", "link", "del", ifbName); err != nil {
-			s.logOptional("skip virtual ifb cleanup", ifbName, err, terr.ErrorContext{Command: "ip link del"})
+			s.logOptional("skip virtual ifb cleanup", ifbName, err, slog.String("command", "ip link del"))
 		}
 
 		if s.logger != nil {

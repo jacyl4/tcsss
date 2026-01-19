@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 
+	"tcsss/internal/infra"
+
 	"github.com/vishvananda/netlink"
 )
 
@@ -66,7 +68,7 @@ func (opt *Optimizer) getPrimaryNICFromNetlink() (string, error) {
 		if route.Dst != nil || route.LinkIndex <= 0 {
 			continue
 		}
-		attrs, err := safeGetLinkAttrs(opt.netlink, route.LinkIndex)
+		attrs, err := infra.SafeGetLinkAttrs(opt.netlink, route.LinkIndex)
 		if err != nil {
 			continue
 		}
@@ -79,7 +81,7 @@ func (opt *Optimizer) getPrimaryNICFromNetlink() (string, error) {
 		if route.LinkIndex <= 0 {
 			continue
 		}
-		attrs, err := safeGetLinkAttrs(opt.netlink, route.LinkIndex)
+		attrs, err := infra.SafeGetLinkAttrs(opt.netlink, route.LinkIndex)
 		if err != nil {
 			continue
 		}

@@ -3,12 +3,13 @@ package route
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
-	terr "tcsss/internal/errors"
+	"tcsss/internal/infra"
 )
 
 // Optimizer handles route table optimization.
@@ -19,8 +20,8 @@ type Optimizer struct {
 	initRwndSegments     int
 	loopbackCwndSegments int
 	loopbackRwndSegments int
-	netlink              NetlinkClient
-	executor             CommandExecutor
+	netlink              infra.NetlinkClient
+	executor             infra.CommandExecutor
 	commandTimeout       time.Duration
 }
 
@@ -64,33 +65,33 @@ func NewOptimizer(logger *slog.Logger, cfg WindowConfig, deps Dependencies) *Opt
 
 // Optimize applies route tuning for loopback, local and NIC routes.
 func (opt *Optimizer) Optimize(ctx context.Context) error {
-	var errs terr.MultiError
+	var errs []error
 
 	if err := opt.optimizeLoopback(ctx); err != nil {
-		errs.Add(fmt.Errorf("loopback: %w", err))
+		errs = append(errs, fmt.Errorf("loopback: %w", err))
 		if opt.logger != nil {
 			opt.logger.Warn("Failed to optimize loopback routes", slog.String("error", err.Error()))
 		}
 	}
 
 	if err := opt.optimizeLocal(ctx); err != nil {
-		errs.Add(fmt.Errorf("local: %w", err))
+		errs = append(errs, fmt.Errorf("local: %w", err))
 		if opt.logger != nil {
 			opt.logger.Warn("Failed to optimize local routes", slog.String("error", err.Error()))
 		}
 	}
 
 	if err := opt.optimizeNIC(ctx); err != nil {
-		errs.Add(fmt.Errorf("nic: %w", err))
+		errs = append(errs, fmt.Errorf("nic: %w", err))
 		if opt.logger != nil {
 			opt.logger.Warn("Failed to optimize NIC routes", slog.String("error", err.Error()))
 		}
 	}
 
-	finalErr := errs.ErrorOrNil()
+	finalErr := errors.Join(errs...)
 	if opt.logger != nil {
 		if finalErr != nil {
-			opt.logger.Warn("Route optimization completed with errors", slog.Int("error_count", errs.Len()))
+			opt.logger.Warn("Route optimization completed with errors", slog.Int("error_count", len(errs)))
 		} else {
 			opt.logger.Info("Route optimization completed successfully")
 		}
@@ -125,12 +126,11 @@ func (opt *Optimizer) optimizeLoopback(ctx context.Context) error {
 
 func (opt *Optimizer) optimizeNIC(ctx context.Context) error {
 	nic, err := opt.getPrimaryNIC()
-	if err != nil || nic == "" {
-		return terr.New(
-			terr.CategoryRecoverable,
-			fmt.Errorf("failed to detect primary NIC: %w", err),
-			terr.ErrorContext{Operation: "detect_primary_nic"},
-		)
+	if err != nil {
+		return fmt.Errorf("failed to detect primary NIC: %w", err)
+	}
+	if nic == "" {
+		return errors.New("failed to detect primary NIC: empty result")
 	}
 
 	congctl, err := opt.getCurrentCongestionControl()
@@ -151,7 +151,6 @@ func (opt *Optimizer) optimizeNIC(ctx context.Context) error {
 			slog.String("interface", nic),
 			slog.String("congctl", congctl),
 		},
-		commonErrContext: terr.ErrorContext{Interface: nic},
 	}
 	return opt.optimize(ctx, job)
 }
@@ -165,23 +164,23 @@ func (opt *Optimizer) optimize(ctx context.Context, job routeJob) error {
 	filtered := opt.filterRoutes(lines, job.filter)
 
 	if opt.logger != nil {
-		attrs := appendAttrs(job.commonLogAttrs,
-			slog.Int("total_routes", len(filtered)),
-		)
-		opt.logger.Info(fmt.Sprintf("%s routes optimization started", job.category), terr.AttrsToArgs(attrs)...)
+		attrs := append([]slog.Attr{}, job.commonLogAttrs...)
+		attrs = append(attrs, slog.Int("total_routes", len(filtered)))
+		opt.logger.LogAttrs(ctx, slog.LevelInfo, fmt.Sprintf("%s routes optimization started", job.category), attrs...)
 	}
 
 	start := time.Now()
 	optimized, skipped, applyErr := opt.applyRoutes(ctx, filtered, job.params.args(), job.category)
 
 	if opt.logger != nil {
-		attrs := appendAttrs(job.commonLogAttrs,
+		attrs := append([]slog.Attr{}, job.commonLogAttrs...)
+		attrs = append(attrs,
 			slog.Int("optimized", optimized),
 			slog.Int("skipped", skipped),
 			slog.Int("total", len(filtered)),
 			slog.Duration("duration", time.Since(start)),
 		)
-		opt.logger.Info(fmt.Sprintf("%s routes optimization completed", job.category), terr.AttrsToArgs(attrs)...)
+		opt.logger.LogAttrs(ctx, slog.LevelInfo, fmt.Sprintf("%s routes optimization completed", job.category), attrs...)
 	}
 
 	if applyErr != nil {
@@ -190,54 +189,24 @@ func (opt *Optimizer) optimize(ctx context.Context, job routeJob) error {
 	return nil
 }
 
-func appendAttrs(base []slog.Attr, additional ...slog.Attr) []slog.Attr {
-	if len(additional) == 0 {
-		return cloneAttrs(base)
-	}
-	result := make([]slog.Attr, 0, len(base)+len(additional))
-	result = append(result, base...)
-	result = append(result, additional...)
-	return result
-}
-
-func cloneAttrs(attrs []slog.Attr) []slog.Attr {
-	if len(attrs) == 0 {
-		return nil
-	}
-	out := make([]slog.Attr, len(attrs))
-	copy(out, attrs)
-	return out
-}
-
 type routeFilter func(string) bool
 
 type routeJob struct {
-	category         string
-	routeArgs        []string
-	filter           routeFilter
-	params           params
-	fetchOperation   string
-	applyOperation   string
-	commonLogAttrs   []slog.Attr
-	commonErrContext terr.ErrorContext
+	category       string
+	routeArgs      []string
+	filter         routeFilter
+	params         params
+	fetchOperation string
+	applyOperation string
+	commonLogAttrs []slog.Attr
 }
 
 func (job routeJob) fetchError(err error) error {
-	context := terr.ErrorContext{Operation: job.fetchOperation}.Merge(job.commonErrContext)
-	return terr.New(
-		terr.CategoryRecoverable,
-		fmt.Errorf("fetch %s routes: %w", job.category, err),
-		context,
-	)
+	return fmt.Errorf("fetch %s routes: %w", job.category, err)
 }
 
 func (job routeJob) applyError(err error) error {
-	context := terr.ErrorContext{Operation: job.applyOperation}.Merge(job.commonErrContext)
-	return terr.New(
-		terr.CategoryRecoverable,
-		fmt.Errorf("apply %s route changes: %w", job.category, err),
-		context,
-	)
+	return fmt.Errorf("apply %s route changes: %w", job.category, err)
 }
 
 func (opt *Optimizer) cleanRouteLine(line string) string {
@@ -291,7 +260,7 @@ func (opt *Optimizer) runIPCommand(ctx context.Context, args ...string) (string,
 	ctx, cancel := opt.commandContext(ctx)
 	defer cancel()
 
-	executor := ensureExecutor(opt.executor)
+	executor := infra.EnsureExecutor(opt.executor)
 	return executor.Run(ctx, "ip", args)
 }
 
@@ -299,7 +268,7 @@ func (opt *Optimizer) runCommand(ctx context.Context, name string, args ...strin
 	ctx, cancel := opt.commandContext(ctx)
 	defer cancel()
 
-	executor := ensureExecutor(opt.executor)
+	executor := infra.EnsureExecutor(opt.executor)
 	return executor.Run(ctx, name, args)
 }
 

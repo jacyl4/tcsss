@@ -137,26 +137,23 @@ tcsss/
 ├── cmd/                               # CLI 可执行入口目录
 │   └── tcsss/
 │       └── main.go                     # 程序入口与启动流程
-├── internal/                          # 内部业务逻辑与子模块
+├── internal/                          # 内部业务逻辑与子模块（约 3400 行）
 │   ├── app/
 │   │   └── daemon.go                   # 守护进程生命周期管理
 │   ├── config/
-│   │   ├── constants.go                # 配置模块常量定义
-│   │   ├── selector.go                 # 模板扫描与选择逻辑
-│   │   └── types.go                    # 配置相关结构体声明
+│   │   ├── constants.go                # 共享常量与默认值
+│   │   └── selector.go                 # 模板扫描与内存档位选择
 │   ├── detector/
-│   │   ├── memory.go                   # 内存容量探测实现
 │   │   ├── modules.go                  # 内核模块加载检测
-│   │   └── runtime.go                  # 运行环境能力评估
-│   ├── errors/
-│   │   ├── context.go                  # 错误上下文封装
-│   │   ├── errors.go                   # 统一错误类型定义
-│   │   ├── logging.go                  # 错误日志辅助工具
-│   │   └── multierror.go               # 多错误聚合处理
+│   │   └── runtime.go                  # 运行环境前置校验
+│   ├── infra/
+│   │   └── deps.go                     # 共享抽象（NetlinkClient、CommandExecutor）
+│   ├── retry/
+│   │   └── retry.go                    # 通用重试与指数退避
 │   ├── route/
 │   │   ├── config.go                   # 路由优化配置项
 │   │   ├── deps.go                     # 路由优化依赖注入
-│   │   ├── detection.go                # 路由环境检测逻辑
+│   │   ├── detection.go                # 网卡与拥塞控制检测
 │   │   └── optimizer.go                # 路由表调优实现
 │   ├── sysinfo/
 │   │   └── memory.go                   # 系统内存信息读取
@@ -165,25 +162,14 @@ tcsss/
 │   │   ├── rlimit.go                   # 进程 rlimit 应用器
 │   │   └── sysctlconf.go               # sysctl.conf 渲染器
 │   └── traffic/
-│       ├── classifier.go               # 接口分类入口
-│       ├── classifier_cache.go         # 分类结果缓存层
-│       ├── classifier_detect.go        # 接口属性探测逻辑
-│       ├── classifier_patterns.go      # 分类规则与模式
-│       ├── constants.go                # 流量模块常量
-│       ├── deps.go                     # 流量模块依赖注入
-│       ├── ethtool_manager.go          # NIC offload 配置管理
-│       ├── ifb_manager.go              # IFB 镜像设备管理
-│       ├── netlink_watcher.go          # Netlink 事件监听
+│       ├── classifier.go               # 接口分类（含缓存）
+│       ├── ethtool.go                  # NIC offload 管理（批量操作）
+│       ├── ifb.go                      # IFB 镜像设备管理
 │       ├── profiles.go                 # CAKE 预设档位定义
 │       ├── settings.go                 # 整形参数配置项
-│       ├── shaper.go                   # 整形流程调度入口
-│       ├── shaper_apply.go             # 整形执行与应用逻辑
-│       ├── shaper_cleanup.go           # 整形资源清理流程
-│       ├── shaper_errors.go            # 整形错误分类
-│       ├── shaper_steps.go             # 整形步骤定义
-│       ├── signature.go                # 接口签名与唯一性
-│       ├── tc_config.go                # tc 配置模板生成
-│       └── tc_executor.go              # tc 命令执行封装
+│       ├── shaper.go                   # 整形流程调度（worker pool）
+│       ├── tc.go                       # tc 命令构建与执行
+│       └── watcher.go                  # Netlink 事件监听
 ├── systemd/                            # systemd 单元目录
 ├── templates/                          # 样例配置模板目录
 ├── go.mod                              # Go 模块依赖声明

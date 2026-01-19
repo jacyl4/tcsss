@@ -1,4 +1,4 @@
-package traffic
+package infra
 
 import (
 	"bytes"
@@ -23,56 +23,58 @@ type NetlinkClient interface {
 	AddrSubscribeWithOptions(ch chan netlink.AddrUpdate, done chan struct{}, opts netlink.AddrSubscribeOptions) error
 }
 
-// CommandExecutor abstracts command execution.
+// CommandExecutor abstracts external command execution.
 type CommandExecutor interface {
 	Run(ctx context.Context, name string, args []string) (string, error)
 }
 
-type defaultNetlinkClient struct{}
+// DefaultNetlinkClient provides the production netlink implementation.
+type DefaultNetlinkClient struct{}
 
-func (defaultNetlinkClient) LinkList() ([]netlink.Link, error) {
+func (DefaultNetlinkClient) LinkList() ([]netlink.Link, error) {
 	return netlink.LinkList()
 }
 
-func (defaultNetlinkClient) LinkByName(name string) (netlink.Link, error) {
+func (DefaultNetlinkClient) LinkByName(name string) (netlink.Link, error) {
 	return netlink.LinkByName(name)
 }
 
-func (defaultNetlinkClient) LinkByIndex(index int) (netlink.Link, error) {
+func (DefaultNetlinkClient) LinkByIndex(index int) (netlink.Link, error) {
 	return netlink.LinkByIndex(index)
 }
 
-func (defaultNetlinkClient) LinkDel(link netlink.Link) error {
+func (DefaultNetlinkClient) LinkDel(link netlink.Link) error {
 	return netlink.LinkDel(link)
 }
 
-func (defaultNetlinkClient) LinkSetMTU(link netlink.Link, mtu int) error {
+func (DefaultNetlinkClient) LinkSetMTU(link netlink.Link, mtu int) error {
 	return netlink.LinkSetMTU(link, mtu)
 }
 
-func (defaultNetlinkClient) LinkSetTxQLen(link netlink.Link, qlen int) error {
+func (DefaultNetlinkClient) LinkSetTxQLen(link netlink.Link, qlen int) error {
 	return netlink.LinkSetTxQLen(link, qlen)
 }
 
-func (defaultNetlinkClient) RouteList(link netlink.Link, family int) ([]netlink.Route, error) {
+func (DefaultNetlinkClient) RouteList(link netlink.Link, family int) ([]netlink.Route, error) {
 	return netlink.RouteList(link, family)
 }
 
-func (defaultNetlinkClient) RouteReplace(route *netlink.Route) error {
+func (DefaultNetlinkClient) RouteReplace(route *netlink.Route) error {
 	return netlink.RouteReplace(route)
 }
 
-func (defaultNetlinkClient) LinkSubscribeWithOptions(ch chan netlink.LinkUpdate, done chan struct{}, opts netlink.LinkSubscribeOptions) error {
+func (DefaultNetlinkClient) LinkSubscribeWithOptions(ch chan netlink.LinkUpdate, done chan struct{}, opts netlink.LinkSubscribeOptions) error {
 	return netlink.LinkSubscribeWithOptions(ch, done, opts)
 }
 
-func (defaultNetlinkClient) AddrSubscribeWithOptions(ch chan netlink.AddrUpdate, done chan struct{}, opts netlink.AddrSubscribeOptions) error {
+func (DefaultNetlinkClient) AddrSubscribeWithOptions(ch chan netlink.AddrUpdate, done chan struct{}, opts netlink.AddrSubscribeOptions) error {
 	return netlink.AddrSubscribeWithOptions(ch, done, opts)
 }
 
-type processExecutor struct{}
+// ProcessExecutor runs external commands via exec.CommandContext.
+type ProcessExecutor struct{}
 
-func (processExecutor) Run(ctx context.Context, name string, args []string) (string, error) {
+func (ProcessExecutor) Run(ctx context.Context, name string, args []string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	var output bytes.Buffer
 	cmd.Stdout = &output
@@ -81,14 +83,16 @@ func (processExecutor) Run(ctx context.Context, name string, args []string) (str
 	return output.String(), err
 }
 
-func ensureExecutor(executor CommandExecutor) CommandExecutor {
+// EnsureExecutor returns a default executor when one is not provided.
+func EnsureExecutor(executor CommandExecutor) CommandExecutor {
 	if executor != nil {
 		return executor
 	}
-	return processExecutor{}
+	return ProcessExecutor{}
 }
 
-func safeGetLinkAttrs(client NetlinkClient, index int) (*netlink.LinkAttrs, error) {
+// SafeGetLinkAttrs returns link attributes with consistent error handling.
+func SafeGetLinkAttrs(client NetlinkClient, index int) (*netlink.LinkAttrs, error) {
 	link, err := client.LinkByIndex(index)
 	if err != nil {
 		return nil, fmt.Errorf("link by index %d: %w", index, err)
@@ -101,15 +105,4 @@ func safeGetLinkAttrs(client NetlinkClient, index int) (*netlink.LinkAttrs, erro
 		return nil, fmt.Errorf("link attrs is nil for index %d", index)
 	}
 	return attrs, nil
-}
-
-func getLinkName(client NetlinkClient, index int) (string, error) {
-	attrs, err := safeGetLinkAttrs(client, index)
-	if err != nil {
-		return "", err
-	}
-	if attrs.Name == "" {
-		return "", fmt.Errorf("link name is empty for index %d", index)
-	}
-	return attrs.Name, nil
 }
