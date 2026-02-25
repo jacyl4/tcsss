@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build with tag version
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          make build VERSION="${VERSION}"
+          make build-arm64 VERSION="${VERSION}"
+
+      - name: Package artifacts
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          cp tcsss dist/tcsss-linux-amd64
+          cp tcsss-arm64 dist/tcsss-linux-arm64
+          tar -C dist -czf "dist/tcsss-${VERSION}-linux-amd64.tar.gz" tcsss-linux-amd64
+          tar -C dist -czf "dist/tcsss-${VERSION}-linux-arm64.tar.gz" tcsss-linux-arm64
+          sha256sum "dist/tcsss-${VERSION}-linux-amd64.tar.gz" > "dist/tcsss-${VERSION}-linux-amd64.tar.gz.sha256"
+          sha256sum "dist/tcsss-${VERSION}-linux-arm64.tar.gz" > "dist/tcsss-${VERSION}-linux-arm64.tar.gz.sha256"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/tcsss-${{ github.ref_name }}-linux-amd64.tar.gz
+            dist/tcsss-${{ github.ref_name }}-linux-amd64.tar.gz.sha256
+            dist/tcsss-${{ github.ref_name }}-linux-arm64.tar.gz
+            dist/tcsss-${{ github.ref_name }}-linux-arm64.tar.gz.sha256

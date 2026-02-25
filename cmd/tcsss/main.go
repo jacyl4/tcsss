@@ -19,15 +19,28 @@ import (
 	"tcsss/internal/route"
 	"tcsss/internal/syslimit"
 	"tcsss/internal/traffic"
+	"tcsss/internal/version"
 )
 
 func main() {
 	var confDirFlag string
 	var modeFlag string
+	showVersionShort := flag.Bool("v", false, "print version information")
+	showVersion := flag.Bool("version", false, "print version information")
 
 	flag.StringVar(&confDirFlag, "conf", "", "configuration directory path (default: /etc/tcsss)")
 	flag.StringVar(&modeFlag, "mode", "", "traffic mode: client, server, or aggregate")
 	flag.Parse()
+
+	if *showVersionShort || *showVersion {
+		fmt.Printf(
+			"tcsss %s\ncommit: %s\nbuild: %s\n",
+			version.Version,
+			version.Commit,
+			version.BuildTime,
+		)
+		return
+	}
 
 	legacyModeArg := ""
 	if flag.NArg() > 0 {
@@ -35,6 +48,12 @@ func main() {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger.Info(
+		"tcsss starting",
+		slog.String("version", version.Version),
+		slog.String("commit", version.Commit),
+		slog.String("build_time", version.BuildTime),
+	)
 
 	templateDir, err := resolveTemplateDir(confDirFlag)
 	if err != nil {
