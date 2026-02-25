@@ -28,25 +28,37 @@ jobs:
           make build VERSION="${VERSION}"
           make build-arm64 VERSION="${VERSION}"
 
-      - name: Package artifacts
+      - name: Prepare artifacts
         env:
           VERSION: ${{ github.ref_name }}
         run: |
           mkdir -p dist
-          cp tcsss dist/tcsss-linux-amd64
-          cp tcsss-arm64 dist/tcsss-linux-arm64
-          tar -C dist -czf "dist/tcsss-${VERSION}-linux-amd64.tar.gz" tcsss-linux-amd64
-          tar -C dist -czf "dist/tcsss-${VERSION}-linux-arm64.tar.gz" tcsss-linux-arm64
-          sha256sum "dist/tcsss-${VERSION}-linux-amd64.tar.gz" > "dist/tcsss-${VERSION}-linux-amd64.tar.gz.sha256"
-          sha256sum "dist/tcsss-${VERSION}-linux-arm64.tar.gz" > "dist/tcsss-${VERSION}-linux-arm64.tar.gz.sha256"
+          cp tcsss "dist/tcsss-${VERSION}-linux-amd64"
+          cp tcsss-arm64 "dist/tcsss-${VERSION}-linux-arm64"
+          sha256sum "dist/tcsss-${VERSION}-linux-amd64" > "dist/tcsss-${VERSION}-linux-amd64.sha256"
+          sha256sum "dist/tcsss-${VERSION}-linux-arm64" > "dist/tcsss-${VERSION}-linux-arm64.sha256"
+
+      - name: Generate release notes
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          cat > dist/release-notes.md <<EOF
+          ## Release ${VERSION}
+
+          Linux binaries:
+          - tcsss-${VERSION}-linux-amd64
+          - tcsss-${VERSION}-linux-arm64
+
+          SHA256 checksum files are attached for verification.
+          EOF
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          generate_release_notes: true
+          body_path: dist/release-notes.md
           files: |
-            dist/tcsss-${{ github.ref_name }}-linux-amd64.tar.gz
-            dist/tcsss-${{ github.ref_name }}-linux-amd64.tar.gz.sha256
-            dist/tcsss-${{ github.ref_name }}-linux-arm64.tar.gz
-            dist/tcsss-${{ github.ref_name }}-linux-arm64.tar.gz.sha256
+            dist/tcsss-${{ github.ref_name }}-linux-amd64
+            dist/tcsss-${{ github.ref_name }}-linux-amd64.sha256
+            dist/tcsss-${{ github.ref_name }}-linux-arm64
+            dist/tcsss-${{ github.ref_name }}-linux-arm64.sha256
